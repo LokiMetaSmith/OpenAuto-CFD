@@ -83,7 +83,7 @@ if (!$podmanInstalled) {
 # 3. Try Safe Restart First
 Write-Host "Attempting safe restart of Podman machine..." -ForegroundColor Yellow
 if (Get-Command "podman" -ErrorAction SilentlyContinue) {
-    podman machine stop *>$null
+    podman machine stop 2>&1 | Where-Object { $_ -is [String] } | Out-Null
     wsl --shutdown
     Start-Sleep -Seconds 3
     podman machine start
@@ -116,16 +116,16 @@ if (Get-Command "podman" -ErrorAction SilentlyContinue) {
             $machineName = $machine.Trim()
             if (![string]::IsNullOrEmpty($machineName)) {
                 Write-Host "Removing Podman machine: $machineName"
-                podman machine stop $machineName *>$null
-                podman machine rm -f $machineName *>$null
+                podman machine stop $machineName 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+                podman machine rm -f $machineName 2>&1 | Where-Object { $_ -is [String] } | Out-Null
             }
         }
     } else {
         Write-Host "Attempting to remove default Podman machines..."
-        podman machine stop default *>$null
-        podman machine rm -f default *>$null
-        podman machine stop podman-machine-default *>$null
-        podman machine rm -f podman-machine-default *>$null
+        podman machine stop default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        podman machine rm -f default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        podman machine stop podman-machine-default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        podman machine rm -f podman-machine-default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
     }
 }
 
@@ -200,14 +200,14 @@ if (Get-Command "podman" -ErrorAction SilentlyContinue) {
             $connName = $conn.Trim()
             if (![string]::IsNullOrEmpty($connName)) {
                 Write-Host "Removing lingering Podman connection: $connName"
-                podman system connection rm $connName *>$null
+                podman system connection rm $connName 2>&1 | Where-Object { $_ -is [String] } | Out-Null
             }
         }
     } else {
         # Fallback to defaults if list fails
-        podman system connection rm default *>$null
-        podman system connection rm podman-machine-default *>$null
-        podman system connection rm podman-machine-default-root *>$null
+        podman system connection rm default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        podman system connection rm podman-machine-default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        podman system connection rm podman-machine-default-root 2>&1 | Where-Object { $_ -is [String] } | Out-Null
     }
 }
 
