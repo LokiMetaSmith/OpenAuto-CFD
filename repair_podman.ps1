@@ -83,19 +83,29 @@ if (!$podmanInstalled) {
 # 3. Try Safe Restart First
 Write-Host "Attempting safe restart of Podman machine..." -ForegroundColor Yellow
 if (Get-Command "podman" -ErrorAction SilentlyContinue) {
-    podman machine stop 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-    wsl --shutdown
-    Start-Sleep -Seconds 3
-    podman machine start
-    if ($LASTEXITCODE -eq 0) {
-        podman info >$null 2>&1
+    $stopOutput = ""
+    try {
+        $stopOutput = podman machine stop 2>&1 | Out-String
+    } catch {
+        $stopOutput = $_.ToString()
+    }
+
+    if ($stopOutput -match "quiesce") {
+        Write-Host "Quiesce state detected. A complete teardown is required. Skipping safe restart..." -ForegroundColor Yellow
+    } else {
+        wsl --shutdown
+        Start-Sleep -Seconds 3
+        podman machine start
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "Safe restart successful. Podman is responsive." -ForegroundColor Green
-            exit 0
+            podman info >$null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Safe restart successful. Podman is responsive." -ForegroundColor Green
+                exit 0
+            }
         }
     }
 }
-Write-Host "Safe restart failed or Podman not responsive. Proceeding with full repair..." -ForegroundColor Yellow
+Write-Host "Safe restart failed, quiesce detected, or Podman not responsive. Proceeding with full repair..." -ForegroundColor Yellow
 
 # 4. Kill lingering Podman and API proxy processes BEFORE attempting to delete files
 Write-Host "Checking for lingering Podman and proxy processes..." -ForegroundColor Yellow
@@ -110,22 +120,26 @@ if ($lingeringProcesses) {
 # 5. Stop and remove existing Podman machines
 Write-Host "Cleaning up existing Podman machines..." -ForegroundColor Yellow
 if (Get-Command "podman" -ErrorAction SilentlyContinue) {
-    $machines = podman machine list --format "{{.Name}}" 2>&1 | Where-Object { $_ -is [String] }
+    $machines = ""
+    try {
+        $machines = podman machine list --format "{{.Name}}" 2>&1 | Where-Object { $_ -is [String] }
+    } catch {}
+
     if ($LASTEXITCODE -eq 0 -and $machines) {
         foreach ($machine in $machines) {
             $machineName = $machine.Trim()
             if (![string]::IsNullOrEmpty($machineName)) {
                 Write-Host "Removing Podman machine: $machineName"
-                podman machine stop $machineName 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-                podman machine rm -f $machineName 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+                try { podman machine stop $machineName 2>&1 | Out-Null } catch {}
+                try { podman machine rm -f $machineName 2>&1 | Out-Null } catch {}
             }
         }
     } else {
         Write-Host "Attempting to remove default Podman machines..."
-        podman machine stop default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-        podman machine rm -f default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-        podman machine stop podman-machine-default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-        podman machine rm -f podman-machine-default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        try { podman machine stop default 2>&1 | Out-Null } catch {}
+        try { podman machine rm -f default 2>&1 | Out-Null } catch {}
+        try { podman machine stop podman-machine-default 2>&1 | Out-Null } catch {}
+        try { podman machine rm -f podman-machine-default 2>&1 | Out-Null } catch {}
     }
 }
 
@@ -194,20 +208,24 @@ if (Test-Path $configMachineConf) {
 # 10. Forcefully clean lingering Podman system connections
 Write-Host "Cleaning up lingering Podman system connections..." -ForegroundColor Yellow
 if (Get-Command "podman" -ErrorAction SilentlyContinue) {
-    $connections = podman system connection list --format "{{.Name}}" 2>&1 | Where-Object { $_ -is [String] }
+    $connections = ""
+    try {
+        $connections = podman system connection list --format "{{.Name}}" 2>&1 | Where-Object { $_ -is [String] }
+    } catch {}
+
     if ($LASTEXITCODE -eq 0 -and $connections) {
         foreach ($conn in $connections) {
             $connName = $conn.Trim()
             if (![string]::IsNullOrEmpty($connName)) {
                 Write-Host "Removing lingering Podman connection: $connName"
-                podman system connection rm $connName 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+                try { podman system connection rm $connName 2>&1 | Out-Null } catch {}
             }
         }
     } else {
         # Fallback to defaults if list fails
-        podman system connection rm default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-        podman system connection rm podman-machine-default 2>&1 | Where-Object { $_ -is [String] } | Out-Null
-        podman system connection rm podman-machine-default-root 2>&1 | Where-Object { $_ -is [String] } | Out-Null
+        try { podman system connection rm default 2>&1 | Out-Null } catch {}
+        try { podman system connection rm podman-machine-default 2>&1 | Out-Null } catch {}
+        try { podman system connection rm podman-machine-default-root 2>&1 | Out-Null } catch {}
     }
 }
 
