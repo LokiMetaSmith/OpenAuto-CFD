@@ -82,7 +82,7 @@ def resize_podman_machine(memory_mb, cpus=None, machine_name="podman-machine-def
 
 def main():
     parser = argparse.ArgumentParser(description="Configure Podman Machine Resources")
-    parser.add_argument("--memory", type=int, default=8192, help="Target memory in MB (default: 8192)")
+    parser.add_argument("--memory", type=int, default=16384, help="Target memory in MB (default: 16384)")
     parser.add_argument("--cpus", type=int, help="Target CPU count")
     parser.add_argument("--machine", type=str, default="podman-machine-default", help="Machine name (default: podman-machine-default)")
     parser.add_argument("-y", "--yes", action="store_true", help="Automatically confirm all prompts")
