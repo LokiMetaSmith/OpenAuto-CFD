@@ -226,7 +226,7 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
 
                     if ram_gb < 7.5 and foam_driver.container_tool == "podman":
                         print(f"Tip: Your container memory is low ({ram_gb:.1f}GB < 8GB). You can increase it by running:")
-                        print("     python optimizer/setup_machine.py --memory 8192")
+                        print("     python optimizer/setup_machine.py --memory 16384")
 
                 except Exception as e:
                     print(f"Warning: Failed to detect memory ({e}). Using default.")

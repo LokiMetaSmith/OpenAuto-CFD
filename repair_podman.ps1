@@ -231,7 +231,7 @@ if (Get-Command "podman" -ErrorAction SilentlyContinue) {
 
 # 11. Initialize and start a fresh Podman machine
 Write-Host "Initializing a fresh Podman machine..." -ForegroundColor Cyan
-podman machine init --memory 8192
+podman machine init --memory 16384
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to initialize Podman machine."
     exit 1
