@@ -231,7 +231,7 @@ if (Get-Command "podman" -ErrorAction SilentlyContinue) {
 
 # 11. Initialize and start a fresh Podman machine
 Write-Host "Initializing a fresh Podman machine..." -ForegroundColor Cyan
-podman machine init --memory 8192
+podman machine init --memory 32768
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to initialize Podman machine."
     exit 1
@@ -242,6 +242,12 @@ podman machine start
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to start Podman machine."
     exit 1
+}
+
+Write-Host "Configuring Podman machine resources via setup_machine.py..." -ForegroundColor Cyan
+python optimizer/setup_machine.py --memory 32768
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "setup_machine.py failed, but continuing..."
 }
 
 # 12. Verify functionality
