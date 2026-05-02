@@ -1912,15 +1912,18 @@ cloudFunctions
         seen_patch_names = set()
 
         for key, filename in stl_assets.items():
-            patch_name = "corkscrew"
-            if key in physics_boundaries:
-                patch_name = key
-            elif key == "wall":
+            if key == "fluid":
                 patch_name = "corkscrew"
+            elif key == "wall":
+                patch_name = "wall"
+            elif key in physics_boundaries:
+                patch_name = key
             elif key == "inlet":
                 patch_name = "inlet"
             elif key == "outlet":
                 patch_name = "outlet"
+            else:
+                patch_name = key
 
             geom = {
                 "filename": filename,
