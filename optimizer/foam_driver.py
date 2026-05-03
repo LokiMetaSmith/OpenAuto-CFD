@@ -1318,7 +1318,7 @@ method          {method};
         with open(boundary_file, 'r') as f:
             content = f.read()
 
-        patches_to_check = ["corkscrew"]
+        patches_to_check = []
         physics_boundaries = self.config.get('physics', {}).get('boundaries', {})
         if physics_boundaries:
             for name, opts in physics_boundaries.items():
@@ -1327,25 +1327,32 @@ method          {method};
         else:
             patches_to_check.extend(["inlet", "outlet"])
 
-        for patch in patches_to_check:
-            # Match: patch_name { ... nFaces X; ... }
-            # Use DOTALL to match across lines
-            # Pattern: patch \s* \{ .*? nFaces \s+ (\d+) ;
+        corkscrew_found = False
+        bin_1_found = False
+
+        for patch in patches_to_check + ["corkscrew", "bin_1"]:
             pattern = re.compile(rf"{patch}\s*\{{.*?nFaces\s+(\d+);", re.DOTALL)
             match = pattern.search(content)
             if not match:
-                # OpenFOAM sometimes quotes patch names in boundary file
                 pattern_quoted = re.compile(rf'"{patch}"\s*\{{.*?nFaces\s+(\d+);', re.DOTALL)
                 match = pattern_quoted.search(content)
 
-            if not match:
-                print(f"Error: Patch '{patch}' not found in boundary file.")
-                return False
+            if patch == "corkscrew":
+                corkscrew_found = match is not None and int(match.group(1)) > 0
+            elif patch == "bin_1":
+                bin_1_found = match is not None and int(match.group(1)) > 0
+            else:
+                if not match:
+                    print(f"Error: Patch '{patch}' not found in boundary file.")
+                    return False
+                n_faces = int(match.group(1))
+                if n_faces <= 0:
+                    print(f"Error: Patch '{patch}' has 0 faces.")
+                    return False
 
-            n_faces = int(match.group(1))
-            if n_faces <= 0:
-                print(f"Error: Patch '{patch}' has 0 faces.")
-                return False
+        if not corkscrew_found and not bin_1_found:
+            print("Error: Neither 'corkscrew' nor 'bin_1' patches were found with >0 faces in boundary file.")
+            return False
 
         return True
 
