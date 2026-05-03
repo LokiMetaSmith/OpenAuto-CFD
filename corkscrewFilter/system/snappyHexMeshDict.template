@@ -42,10 +42,12 @@ castellatedMeshControls
 
     features
     (
+        {% for geom in unique_geometries %}
         {
-            file "corkscrew_fluid.eMesh";
+            file "{{ geom.filename.replace('.stl', '.eMesh') }}";
             level 1;
         }
+        {% endfor %}
     );
 
     refinementSurfaces

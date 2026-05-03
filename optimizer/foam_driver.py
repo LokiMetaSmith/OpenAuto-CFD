@@ -1906,6 +1906,48 @@ cloudFunctions
                     f.write(f"\nError renaming scaled mesh: {e}\n")
             return False
 
+    def _generate_surfaceFeatureExtractDict(self, unique_geometries):
+        """
+        Generates system/surfaceFeatureExtractDict using Jinja2 or direct formatting.
+        """
+        template_str = """/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2512                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      surfaceFeatureExtractDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+"""
+        for geom in unique_geometries:
+            filename = geom["filename"]
+            template_str += f"""{filename}
+{{
+    extractionMethod    extractFromSurface;
+
+    extractFromSurfaceCoeffs
+    {{
+        includedAngle   150;
+    }}
+
+    writeObj        true;
+}}
+
+"""
+        template_str += "// ************************************************************************* //\n"
+
+        with open(os.path.join(self.case_dir, "system", "surfaceFeatureExtractDict"), 'w') as f:
+            f.write(template_str)
+
     def _generate_snappyHexMeshDict(self, stl_assets, add_layers=True):
         """
         Updates system/snappyHexMeshDict to include all assets as geometry/patches using Jinja2.
@@ -1943,6 +1985,8 @@ cloudFunctions
             if patch_name not in seen_patch_names:
                 unique_geometries.append(geom)
                 seen_patch_names.add(patch_name)
+
+        self._generate_surfaceFeatureExtractDict(unique_geometries)
 
         template_path = os.path.join(self.case_dir, "system", "snappyHexMeshDict.template")
         shm_path = os.path.join(self.case_dir, "system", "snappyHexMeshDict")
