@@ -1962,29 +1962,32 @@ FoamFile
 
         for key, filename in stl_assets.items():
             if key == "fluid":
-                patch_name = "corkscrew"
+                final_patch_name = "corkscrew"
             elif key == "wall":
-                patch_name = "wall"
+                final_patch_name = "wall"
             elif key in physics_boundaries:
-                patch_name = key
+                final_patch_name = key
             elif key == "inlet":
-                patch_name = "inlet"
+                final_patch_name = "inlet"
             elif key == "outlet":
-                patch_name = "outlet"
+                final_patch_name = "outlet"
             else:
-                patch_name = key
+                final_patch_name = key
+
+            geometry_name = f"{final_patch_name}_{key}"
 
             geom = {
                 "filename": filename,
-                "name": patch_name,
-                "level": "(3 4)" if patch_name == "corkscrew" else "(1 1)",
+                "geometry_name": geometry_name,
+                "final_patch_name": final_patch_name,
+                "level": "(3 4)" if final_patch_name == "corkscrew" else "(1 1)",
                 "patch_info": key in physics_boundaries or key in ["inlet", "outlet", "wall", "fluid"]
             }
             geometries.append(geom)
 
-            if patch_name not in seen_patch_names:
+            if final_patch_name not in seen_patch_names:
                 unique_geometries.append(geom)
-                seen_patch_names.add(patch_name)
+                seen_patch_names.add(final_patch_name)
 
         self._generate_surfaceFeatureExtractDict(unique_geometries)
 
