@@ -27,7 +27,7 @@ geometry
     {{ geom.filename }}
     {
         type triSurfaceMesh;
-        name {{ geom.geometry_name }};
+        name {{ geom.name }};
     }
     {% endfor %}
 };
@@ -53,9 +53,9 @@ castellatedMeshControls
     refinementSurfaces
     {
         {% for geom in unique_geometries %}
-        {{ geom.geometry_name }}
+        {{ geom.name }}
         {
-            {% if geom.final_patch_name == "corkscrew" %}
+            {% if geom.name == "corkscrew" %}
             level (4 5);
             {% else %}
             level {{ geom.level }};
@@ -64,8 +64,7 @@ castellatedMeshControls
             patchInfo
             {
                 type patch;
-                name {{ geom.final_patch_name }};
-                inGroups ({{ geom.final_patch_name }}Group);
+                inGroups ({{ geom.name }}Group);
             }
             {% endif %}
         }
