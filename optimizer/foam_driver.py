@@ -1298,7 +1298,7 @@ method          {method};
             return
 
         # Regex to find locationInMesh (x y z); (Using DOTALL to catch multi-line formatting)
-        pattern = re.compile(r"locationInMesh\s*\(.*?\);", re.DOTALL)
+        pattern = re.compile(r"locationInMesh\s*(?:\{\{.*?\}\}|\(.*?\));", re.DOTALL)
         if pattern.search(content):
             content = pattern.sub(f"locationInMesh {location};", content)
 
@@ -1999,7 +1999,7 @@ FoamFile
         if os.path.exists(shm_path):
             with open(shm_path, 'r') as f:
                 existing_content = f.read()
-                pattern = re.compile(r"locationInMesh\s*\((.*?)\);", re.DOTALL)
+                pattern = re.compile(r"locationInMesh\s*(?:\{\{.*?\}\}|\((.*?)\));", re.DOTALL)
                 m = pattern.search(existing_content)
                 if m:
                     preserved_location = m.group(1)
@@ -2019,9 +2019,10 @@ FoamFile
         if os.path.exists(shm_path):
             with open(shm_path, 'r') as f:
                 content = f.read()
-            match = re.search(r"locationInMesh\s*(\(.*?\));", content, re.DOTALL)
+            match = re.search(r"locationInMesh\s*(?:\{\{.*?\}\}|(\(.*?\)));", content, re.DOTALL)
             if match:
-                location_in_mesh = match.group(1)
+                if match.group(1):
+                    location_in_mesh = match.group(1)
 
         template = jinja2.Template(template_str)
         content = template.render(
@@ -2033,7 +2034,7 @@ FoamFile
 
         # Restore preserved location
         if preserved_location:
-            pattern = re.compile(r"locationInMesh\s*\(.*?\);", re.DOTALL)
+            pattern = re.compile(r"locationInMesh\s*(?:\{\{.*?\}\}|\(.*?\));", re.DOTALL)
             if pattern.search(content):
                 content = pattern.sub(f"locationInMesh ({preserved_location});", content)
 
