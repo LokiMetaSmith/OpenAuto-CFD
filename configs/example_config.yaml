@@ -1,0 +1,27 @@
+# example_config.yaml
+project: "Antenna_Optimization_001"
+physics:
+  type: "em"                # Options: "cfd" or "em"
+  solver: "openEMS"         # The driver to invoke
+  frequency_range: [2.4e9, 2.5e9] # Parameters relevant to EM
+  objectives:
+    minimize: ["S11"]
+    maximize: ["gain"]
+
+geometry:
+  parametric_model: "dipole_antenna.scad"
+  variables:
+    length: [40, 60]
+    thickness: [1, 5]
+
+optimization:
+  target: "maximize"
+  objective_function: "gain - (100 * S11_penalty)"
+  description: "Maximize gain while minimizing S11 return loss."
+  constraints:
+    - "S11 < -10"
+  extractors:
+    - type: "sparameter"
+      metric_name: "S11"
+    - type: "radiation_pattern"
+      metric_name: "gain"
