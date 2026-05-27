@@ -254,9 +254,33 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Verifying Podman installation and machine status..." -ForegroundColor Cyan
 podman info
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Podman successfully deployed and repaired!" -ForegroundColor Green
-} else {
+if ($LASTEXITCODE -ne 0) {
     Write-Error "Podman info failed. There may still be issues."
     exit 1
 }
+
+# 13. Check if OpenFOAM and openEMS images are pulled
+$OpenFOAMImage = "docker.io/opencfd/openfoam-default:2512"
+$OpenEMSImage = "docker.io/thliebig/openems:latest"
+
+try {
+    $imageExists = podman image exists $OpenFOAMImage 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "OpenFOAM image not found locally. Pulling $OpenFOAMImage ..." -ForegroundColor Yellow
+        podman pull $OpenFOAMImage
+    } else {
+        Write-Host "OpenFOAM image ($OpenFOAMImage) already exists." -ForegroundColor Green
+    }
+
+    $imageExistsEMS = podman image exists $OpenEMSImage 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "OpenEMS image not found locally. Pulling $OpenEMSImage ..." -ForegroundColor Yellow
+        podman pull $OpenEMSImage
+    } else {
+        Write-Host "OpenEMS image ($OpenEMSImage) already exists." -ForegroundColor Green
+    }
+} catch {
+    Write-Host "Error checking/pulling container images: $_" -ForegroundColor Red
+}
+
+Write-Host "Podman successfully deployed and repaired!" -ForegroundColor Green

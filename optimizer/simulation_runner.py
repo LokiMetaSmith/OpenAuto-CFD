@@ -7,18 +7,18 @@ from utils import Timer, get_container_memory_gb
 from parameter_validator import validate_parameters
 from validator import Validator
 
-def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_fluid.stl", dry_run=False, skip_cfd=False, dry_mesh=False, iteration=0, reuse_mesh=False, output_prefix=None, verbose=False, params_file=None, turbulence="laminar", debug=False):
+def run_simulation(scad_driver, physics_driver, params, output_stl_name="corkscrew_fluid.stl", dry_run=False, skip_cfd=False, dry_mesh=False, iteration=0, reuse_mesh=False, output_prefix=None, verbose=False, params_file=None, turbulence="laminar", debug=False):
     """
     Executes the full simulation pipeline:
     1. Generate Fluid Geometry (STL)
-    2. Update OpenFOAM BlockMesh
-    3. Run OpenFOAM Simulation
+    2. Update OpenFOAM BlockMesh (if CFD)
+    3. Run Physics Simulation
     4. Extract Metrics
     5. Generate Visualization Images (Solid Model)
 
     Args:
         scad_driver (ScadDriver): Initialized ScadDriver instance.
-        foam_driver (FoamDriver): Initialized FoamDriver instance.
+        physics_driver (PhysicsDriver): Initialized PhysicsDriver instance (e.g. FoamDriver or OpenEMSDriver).
         params (dict): Dictionary of parameters for the run.
         output_stl_name (str): Filename for the fluid STL (inside case/constant/triSurface).
         dry_run (bool): If True, skips actual processing and returns mock data.
@@ -60,12 +60,12 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
     # 0.5. Prepare Case Directory and Configs
     if not dry_run and not skip_cfd:
         # Early check for environment
-        if not foam_driver.has_tools:
-            print("OpenFOAM tools not found. Skipping simulation.")
-            return {"error": "environment_missing_tools", "details": "Neither OpenFOAM nor Docker found"}, [], None, None, None
+        if getattr(physics_driver, 'has_tools', False) == False:
+            print("Physics simulation tools not found. Skipping simulation.")
+            return {"error": "environment_missing_tools", "details": "Required physics simulation tools not found"}, [], None, None, None
 
         # Override turbulence if defined in config
-        cfd_settings = foam_driver.config.get('cfd_settings', {})
+        cfd_settings = physics_driver.config.get('cfd_settings', {})
         turbulence = "laminar"
         if cfd_settings and 'turbulence_model' in cfd_settings:
             turbulence = cfd_settings['turbulence_model']
@@ -83,10 +83,10 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
         }
 
         # Initialize base case directory and templates
-        foam_driver.prepare_case(keep_mesh=reuse_mesh, turbulence=turbulence, bin_config=bin_config)
+        physics_driver.prepare_case(keep_mesh=reuse_mesh, turbulence=turbulence, bin_config=bin_config)
 
     # 1. Generate Geometry (Fluid Volume + CFD Assets)
-    tri_surface_dir = os.path.join(foam_driver.case_dir, "constant", "triSurface")
+    tri_surface_dir = os.path.join(physics_driver.case_dir, "constant", "triSurface")
     os.makedirs(tri_surface_dir, exist_ok=True)
 
     # Use specified output name for fluid, others are fixed
@@ -119,7 +119,7 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
                 # 1.1 Validation (in mm, before scaling)
                 print("Validating Geometry...")
                 validator = Validator(verbose=verbose)
-                boundaries_config = foam_driver.config.get("physics", {}).get("boundaries", {})
+                boundaries_config = physics_driver.config.get("physics", {}).get("boundaries", {})
                 val_res = validator.validate_assembly(
                     cfd_assets["fluid"],
                     cfd_assets["inlet"],
@@ -203,7 +203,7 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
 
                 # Estimate cell count to prevent OOM
                 # Dynamically fetch block_margin from config to support various geometries
-                config_margin = foam_driver.config.get("geometry", {}).get("block_margin", [1.2, 1.2, 1.2])
+                config_margin = physics_driver.config.get("geometry", {}).get("block_margin", [1.2, 1.2, 1.2])
                 try:
                     BLOCK_MARGIN = np.array(config_margin)
                 except Exception:
@@ -221,10 +221,10 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
                 # Dynamic Memory Limit
                 try:
                     # Estimate available RAM in GB
-                    ram_gb = get_container_memory_gb(foam_driver.container_tool)
+                    ram_gb = get_container_memory_gb(getattr(physics_driver, 'container_tool', None))
                     print(f"Detected available memory: {ram_gb:.2f} GB")
 
-                    if ram_gb < 7.5 and foam_driver.container_tool == "podman":
+                    if ram_gb < 7.5 and getattr(physics_driver, 'container_tool', None) == "podman":
                         print(f"Tip: Your container memory is low ({ram_gb:.1f}GB < 8GB). You can increase it by running:")
                         print("     python optimizer/setup_machine.py --memory 16384")
 
@@ -266,8 +266,9 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
                     return metrics, [], None, None, None
 
                 print(f"Updating blockMesh with target_cell_size={target_cell_size:.3f}m")
-                # Pass scaled bounds to foam_driver
-                foam_driver.update_blockMesh(bounds_arr, margin=BLOCK_MARGIN, target_cell_size=target_cell_size)
+                # Pass scaled bounds to physics_driver (if it supports blockMesh)
+                if hasattr(physics_driver, 'update_blockMesh'):
+                    physics_driver.update_blockMesh(bounds_arr, margin=BLOCK_MARGIN, target_cell_size=target_cell_size)
 
                 # 1. Try to use MESH_ANCHOR from OpenSCAD script
                 custom_location = None
@@ -296,7 +297,8 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
                     return metrics, [], None, None, None
 
                 # Update location
-                foam_driver.update_snappyHexMesh_location(bounds_arr, custom_location=custom_location)
+                if hasattr(physics_driver, 'update_snappyHexMesh_location'):
+                    physics_driver.update_snappyHexMesh_location(bounds_arr, custom_location=custom_location)
         else:
             print("[Reuse Mesh] Skipping BlockMesh update.")
     elif skip_cfd:
@@ -323,7 +325,7 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
                 # Extract add_layers parameter, default True
                 add_layers = params.get("add_layers", True)
 
-                success = foam_driver.run_meshing(log_file=mesh_log, bin_config=bin_config, stl_assets=asset_filenames, add_layers=add_layers)
+                success = physics_driver.run_meshing(log_file=mesh_log, bin_config=bin_config, stl_assets=asset_filenames, add_layers=add_layers)
         else:
             print("[Reuse Mesh] Skipping meshing pipeline.")
             success = True
@@ -331,8 +333,12 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
         if success:
             if dry_mesh:
                 print("[Dry Mesh] Evaluating mesh quality and skipping CFD solver...")
-                mesh_metrics = foam_driver._run_checkMesh()
-                mesh_class = foam_driver._classify_mesh(mesh_metrics)
+                if hasattr(physics_driver, '_run_checkMesh') and hasattr(physics_driver, '_classify_mesh'):
+                    mesh_metrics = physics_driver._run_checkMesh()
+                    mesh_class = physics_driver._classify_mesh(mesh_metrics)
+                else:
+                    mesh_metrics = {}
+                    mesh_class = "unknown"
                 metrics.update({
                     "mesh_quality_class": mesh_class,
                     "max_non_orthogonality": mesh_metrics.get("max_non_orthogonality", 0.0),
@@ -345,37 +351,36 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
                     _scaled = mesh_scaled_for_memory if 'mesh_scaled_for_memory' in locals() else False
                     # User directive: keep turbulence model active on coarse mesh instead of trapping into laminar FPE
 
-                    success = foam_driver.run_solver(log_file=solver_log, mesh_scaled_for_memory=_scaled)
+                    success = physics_driver.run_solver(log_file=solver_log, mesh_scaled_for_memory=_scaled)
 
                 if success:
-                    # Fetch foam metrics and preserve any existing custom metrics (like cell size)
-                    foam_metrics = foam_driver.get_metrics(log_file=solver_log)
-                    metrics.update(foam_metrics)
+                    # Fetch physics metrics and preserve any existing custom metrics (like cell size)
+                    physics_metrics = physics_driver.get_metrics(log_file=solver_log)
+                    metrics.update(physics_metrics)
 
-                    # Flow Sanity Check: Only run particles if the flow field is valid
-                    delta_p = metrics.get('delta_p')
-                    residuals = metrics.get('residuals')
-                    if delta_p is None or (residuals is not None and residuals > 1e-3):
-                        print(f"Skipping particle tracking: flow field appears invalid or unconverged (delta_p={delta_p}, residuals={residuals}).")
-                    else:
-                        # Attempt particle tracking
-                        with Timer("Particle Tracking"):
-                            # Pass bin config for injection/interaction setup
-                            foam_driver.run_particle_tracking(log_file=solver_log, bin_config=bin_config, turbulence=turbulence, mesh_scaled_for_memory=_scaled)
+                    # CFD-specific particle tracking check
+                    if hasattr(physics_driver, 'run_particle_tracking'):
+                        delta_p = metrics.get('delta_p')
+                        residuals = metrics.get('residuals')
+                        if delta_p is None or (residuals is not None and residuals > 1e-3):
+                            print(f"Skipping particle tracking: flow field appears invalid or unconverged (delta_p={delta_p}, residuals={residuals}).")
+                        else:
+                            with Timer("Particle Tracking"):
+                                physics_driver.run_particle_tracking(log_file=solver_log, bin_config=bin_config, turbulence=turbulence, mesh_scaled_for_memory=_scaled)
 
-                        # Update metrics with particle stats
-                        particle_metrics = foam_driver.get_metrics(log_file=solver_log)
-                        metrics.update(particle_metrics)
+                            particle_metrics = physics_driver.get_metrics(log_file=solver_log)
+                            metrics.update(particle_metrics)
 
-                    # Generate VTK
-                    vtk_dir = foam_driver.generate_vtk()
-                    if vtk_dir:
-                        timestamp = int(time.time())
-                        # Archive to exports/
-                        zip_name = os.path.join("exports", f"run_{timestamp}_vtk")
-                        print(f"Zipping VTK output to {zip_name}.zip...")
-                        shutil.make_archive(zip_name, 'zip', vtk_dir)
-                        vtk_zip_path = zip_name + ".zip"
+                    # Generate VTK if supported
+                    if hasattr(physics_driver, 'generate_vtk'):
+                        vtk_dir = physics_driver.generate_vtk()
+                        if vtk_dir:
+                            timestamp = int(time.time())
+                            # Archive to exports/
+                            zip_name = os.path.join("exports", f"run_{timestamp}_vtk")
+                            print(f"Zipping VTK output to {zip_name}.zip...")
+                            shutil.make_archive(zip_name, 'zip', vtk_dir)
+                            vtk_zip_path = zip_name + ".zip"
                 else:
                     print(f"Solver failed. Check {solver_log}")
                     metrics = {"error": "solver_failed"}
@@ -430,24 +435,24 @@ def run_simulation(scad_driver, foam_driver, params, output_stl_name="corkscrew_
         else:
             print(f"Warning: Fluid STL not found at {stl_path}, cannot archive.")
 
-        # Handle debug logic: Save successful OpenFOAM case directories out of the volatile RAM disk,
+        # Handle debug logic: Save successful case directories out of the volatile RAM disk,
         # or clear the case directory to save space if not successful and debug is off.
         if "error" not in metrics or debug:
-            if foam_driver.case_dir != os.path.abspath(foam_driver.template_dir):
+            if hasattr(physics_driver, 'template_dir') and physics_driver.case_dir != os.path.abspath(physics_driver.template_dir):
                 # Run was successful (or we are in debug mode), so we must preserve the data to persistent disk.
                 # Copy the volatile case_dir (likely in /dev/shm) to a persistent exports location
                 persistent_case_dest = f"{output_prefix}_case"
                 try:
-                    shutil.copytree(foam_driver.case_dir, persistent_case_dest, dirs_exist_ok=True)
-                    print(f"Archived successful OpenFOAM case to {persistent_case_dest}")
+                    shutil.copytree(physics_driver.case_dir, persistent_case_dest, dirs_exist_ok=True)
+                    print(f"Archived successful case to {persistent_case_dest}")
                 except Exception as e:
-                    print(f"Warning: Failed to archive successful OpenFOAM case: {e}")
+                    print(f"Warning: Failed to archive successful case: {e}")
         elif "error" in metrics and not debug:
-            if foam_driver.case_dir != os.path.abspath(foam_driver.template_dir):
+            if hasattr(physics_driver, 'template_dir') and physics_driver.case_dir != os.path.abspath(physics_driver.template_dir):
                 # We can safely clear the volatile case dir contents since it failed and we don't need them
                 try:
-                    for filename in os.listdir(foam_driver.case_dir):
-                        file_path = os.path.join(foam_driver.case_dir, filename)
+                    for filename in os.listdir(physics_driver.case_dir):
+                        file_path = os.path.join(physics_driver.case_dir, filename)
                         if os.path.isfile(file_path) or os.path.islink(file_path):
                             os.unlink(file_path)
                         elif os.path.isdir(file_path):
