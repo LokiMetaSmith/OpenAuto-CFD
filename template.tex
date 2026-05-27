@@ -1,0 +1,30 @@
+\documentclass[twocolumn]{article}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+$if(highlighting-macros)$
+$highlighting-macros$
+$endif$
+
+\title{Autonomous Inverse Design of Helical Inertial Filters for Lunar Exploration: A Software-Defined Engineering Approach}
+\author{Lawrence Kincheloe \\ \textit{NASA / Open Source Community}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+As humanity prepares for sustained lunar presence, the mitigation of abrasive, electrostatic lunar regolith poses a critical challenge to Environmental Control and Life Support Systems (ECLSS). Traditional barrier filtration methods are prone to rapid clogging in such environments. This paper presents the OpenAuto-CFD "Software-Defined Engineering" framework for the autonomous design and optimization of fluid dynamics components, and applies it to helical inertial separators ("corkscrew filters"). By integrating parametric Computer-Aided Design (OpenSCAD), Computational Fluid Dynamics (OpenFOAM), and Generative Artificial Intelligence (LLM), the OpenAuto-CFD system performs an automated search of the high-dimensional design space. We demonstrate that this inverse design methodology can effectively navigate the complex fluid dynamic regime defined by Reynolds ($Re$), Dean ($De$), and Stokes ($Stk$) numbers. Experimental validation confirms the theoretical predictions, highlighting the critical dependence of separation efficiency on inlet velocity and the generation of stable Dean vortices.
+\end{abstract}
+
+$body$
+
+\end{document}
