@@ -103,14 +103,14 @@ class PhysicsEngineFactory:
 
 ## Sprint Todo List
 
-- [ ] Create `example_config.yaml` with the Multi-Physics schema.
-- [ ] Define `PhysicsDriver` base class (`optimizer/physics_driver.py`).
-- [ ] Define `PhysicsEngineFactory` (`optimizer/physics_factory.py`).
-- [ ] Refactor `FoamDriver` to inherit from `PhysicsDriver`.
-- [ ] Create `OpenEMSDriver` skeleton (`optimizer/em_driver.py`).
-- [ ] Refactor `optimizer/main.py` and `optimizer/simulation_runner.py` to use `PhysicsEngineFactory` instead of hardcoded `FoamDriver`.
-- [ ] Refactor `calculate_physics.py` to support engine-agnostic metric calculation.
-- [ ] Update `repair_podman.ps1` and container scripts to pull an openEMS image.
+- [x] Create `example_config.yaml` with the Multi-Physics schema.
+- [x] Define `PhysicsDriver` base class (`optimizer/physics_driver.py`).
+- [x] Define `PhysicsEngineFactory` (`optimizer/physics_factory.py`).
+- [x] Refactor `FoamDriver` to inherit from `PhysicsDriver`.
+- [x] Create `OpenEMSDriver` skeleton (`optimizer/em_driver.py`).
+- [x] Refactor `optimizer/main.py` and `optimizer/simulation_runner.py` to use `PhysicsEngineFactory` instead of hardcoded `FoamDriver`.
+- [x] Refactor `calculate_physics.py` to support engine-agnostic metric calculation.
+- [x] Update `repair_podman.ps1` and container scripts to pull an openEMS image.
 - [ ] Implement `OpenEMSDriver` logic (geometry parsing, FDTD setup, container execution).
 - [ ] Implement `OpenEMSDriver` metric extraction (S-parameters, gain).
 - [ ] Create `run_em_test.py` proof-of-concept for a simple patch/dipole antenna.
