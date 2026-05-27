@@ -132,6 +132,10 @@ def main():
             elif param_def.get('constant', False) and 'value' in param_def:
                 initial_params[param_name] = param_def['value']
 
+    # Fallback to avoid empty initial parameters if no parameters are defined but the optimization loop expects them
+    if not initial_params and not args.params_file:
+        initial_params = {"_dummy": True}
+
     # Extract constraints for the LLM
     constraints_str = config.get('optimization', {}).get('constraints', '')
     objective_func = config.get('optimization', {}).get('objective_function', 'separation_efficiency')

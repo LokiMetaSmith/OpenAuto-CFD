@@ -111,7 +111,7 @@ class PhysicsEngineFactory:
 - [x] Refactor `optimizer/main.py` and `optimizer/simulation_runner.py` to use `PhysicsEngineFactory` instead of hardcoded `FoamDriver`.
 - [x] Refactor `calculate_physics.py` to support engine-agnostic metric calculation.
 - [x] Update `repair_podman.ps1` and container scripts to pull an openEMS image.
-- [ ] Implement `OpenEMSDriver` logic (geometry parsing, FDTD setup, container execution).
-- [ ] Implement `OpenEMSDriver` metric extraction (S-parameters, gain).
-- [ ] Create `run_em_test.py` proof-of-concept for a simple patch/dipole antenna.
-- [ ] Verify LLM context window consistency with new EM JSON outputs.
+- [x] Implement `OpenEMSDriver` logic (geometry parsing, FDTD setup, container execution).
+- [x] Implement `OpenEMSDriver` metric extraction (S-parameters, gain).
+- [x] Create `run_em_test.py` proof-of-concept for a simple patch/dipole antenna.
+- [x] Verify LLM context window consistency with new EM JSON outputs.
