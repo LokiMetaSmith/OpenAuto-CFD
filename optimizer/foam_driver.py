@@ -10,14 +10,12 @@ import shlex
 import numpy as np
 import jinja2
 from utils import run_command_with_spinner, safe_print, ProcessAbortedError
+from physics_driver import PhysicsDriver
 
-class FoamDriver:
+class FoamDriver(PhysicsDriver):
     def __init__(self, case_dir, config=None, template_dir=None, container_engine="auto", num_processors=1, verbose=False, debug=False):
-        self.config = config or {}
+        super().__init__(case_dir, config=config, container_engine=container_engine, verbose=verbose, debug=debug)
         self.template_dir = os.path.abspath(template_dir) if template_dir else os.path.abspath(case_dir)
-        self.container_engine = container_engine
-        self.verbose = verbose
-        self.debug = debug
         self.num_processors = num_processors
 
         # Use a RAM disk (/dev/shm) or a temp directory for the case directory to prevent SSD wear and clutter

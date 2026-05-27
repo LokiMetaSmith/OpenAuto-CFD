@@ -10,7 +10,7 @@ import uuid
 import yaml
 from dotenv import load_dotenv
 from scad_driver import ScadDriver
-from foam_driver import FoamDriver
+from physics_factory import PhysicsEngineFactory
 from llm_agent import LLMAgent
 from data_store import DataStore
 from simulation_runner import run_simulation
@@ -83,7 +83,16 @@ def main():
 
     # Initialize components
     scad = ScadDriver(scad_file, fluid_volume_module=fluid_volume_module)
-    foam = FoamDriver(args.case_dir, config=config, container_engine=args.container_engine, num_processors=args.cpus, verbose=args.verbose, debug=args.debug)
+
+    # Instantiate physics driver using the factory
+    physics_driver = PhysicsEngineFactory.get_driver(
+        args.case_dir,
+        config=config,
+        container_engine=args.container_engine,
+        num_processors=args.cpus,
+        verbose=args.verbose,
+        debug=args.debug
+    )
 
     # Handle --no-llm logic
     if args.no_llm and "GEMINI_API_KEY" in os.environ:
@@ -299,7 +308,7 @@ def main():
             # output_stl is strictly 'corkscrew_fluid.stl' for OpenFOAM compatibility
             metrics, png_paths, solid_stl_path, fluid_stl_path, vtk_zip_path = run_simulation(
                 scad,
-                foam,
+                physics_driver,
                 current_params,
                 output_stl_name=args.output_stl,
                 dry_run=args.dry_run,
@@ -370,7 +379,7 @@ def main():
             i += 1
 
     # Cleanup the driver RAM disk when loop is finished
-    foam.cleanup_ram_disk()
+    physics_driver.cleanup_ram_disk()
 
     print("\nOptimization loop finished.")
 
