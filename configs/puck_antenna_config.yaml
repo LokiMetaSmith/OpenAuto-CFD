@@ -1,0 +1,34 @@
+project_name: "Ground_Puck_Antenna_2_4GHz"
+physics:
+  type: "em"
+  solver: "openEMS"
+  frequency_range: [2.4e9, 2.5e9] # 2.4 GHz ISM Band
+  objectives:
+    minimize: ["S11"]
+    maximize: ["gain"]
+
+geometry:
+  parametric_model: "puck_antenna.scad"
+  parameters:
+    puck_radius: { type: "float", min: 30.0, max: 70.0, default: 50.0 }
+    puck_height: { type: "float", min: 10.0, max: 40.0, default: 20.0 }
+    ground_clearance: { type: "float", min: -20.0, max: 10.0, default: 0.0 } # Negative values allow testing buried configurations
+    panel_radius: { type: "float", min: 20.0, max: 80.0, default: 45.0 }
+    panel_height_above_puck: { type: "float", min: 1.0, max: 30.0, default: 10.0 }
+    num_antennas: { type: "int", min: 2, max: 4, default: 4 } # Test 2 vs 4 element arrays
+    antenna_length: { type: "float", min: 25.0, max: 40.0, default: 31.0 } # Quarter wave ~31mm, but needs tuning for dielectric/ground loading
+    antenna_width: { type: "float", min: 1.0, max: 15.0, default: 4.0 }
+    antenna_angle_offset: { type: "float", min: -10.0, max: 45.0, default: 0.0 } # Tilt upwards to escape ground effects
+
+optimization:
+  target: "maximize"
+  objective_function: "gain - (100 * S11_penalty)"
+  description: "Maximize gain and minimize return loss (S11) for a 2.4GHz antenna. The antenna is mounted on a puck near or below ground level, with a solar panel acting as a potential parasitic reflector above it. Tune the antenna length, tilt angle, and panel clearance to mitigate the severe interference from the ground and panel."
+  constraints:
+    - "S11 < -10" # We need an acceptable impedance match
+    - "antenna_length < puck_radius * 1.5" # Keep form factor constrained
+  extractors:
+    - type: "sparameter"
+      metric_name: "S11"
+    - type: "radiation_pattern"
+      metric_name: "gain"
