@@ -1,0 +1,42 @@
+# example_joint_config.yaml
+project: "Thermal_Antenna_Optimization_001"
+physics:
+  type: "joint"             # Runs both CFD and EM sequentially
+  solver: "multi"
+  frequency_range: [2.4e9, 2.5e9] # Parameters relevant to EM
+  fluid: "air" # Parameters relevant to CFD
+  particle_velocity: "10.0"
+  boundaries:
+    inlet:
+      type: "patch"
+      U: "fixedValue uniform (-10 0 0)"
+      alignment: "vertical"
+    outlet:
+      type: "patch"
+      p: "fixedValue uniform 0"
+      alignment: "vertical"
+
+geometry:
+  parametric_model: "dipole_antenna.scad"
+  variables:
+    length: [40, 60]
+    thickness: [1, 5]
+
+optimization:
+  target: "maximize"
+  objective_function: "gain - (100 * S11_penalty) - (5 * delta_p)"
+  description: "Maximize gain while minimizing S11 return loss and pressure drop across the cooling structure."
+  constraints:
+    - "S11 < -10"
+    - "delta_p < 200"
+  extractors:
+    - type: "sparameter"
+      metric_name: "S11"
+    - type: "radiation_pattern"
+      metric_name: "gain"
+    - type: "surfaceFieldValue"
+      function_name: "inletPressure"
+      metric_name: "p_in"
+    - type: "surfaceFieldValue"
+      function_name: "outletPressure"
+      metric_name: "p_out"
