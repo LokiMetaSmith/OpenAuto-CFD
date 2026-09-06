@@ -1,0 +1,92 @@
+* =====================================================================
+* KiCad Native SPICE Macromodel Library
+* Target: Nanopore Femtoamp Transimpedance Bio-Instrumentation Frontend
+* Board: amplifier.kicad_pcb / amplifier.kicad_sch
+* =====================================================================
+
+* =====================================================================
+* Subcircuit: LMP7721 Precision Femtoamp Input Op-Amp
+* Manufacturer: Texas Instruments
+* Features: 3 fA Input Bias Current, 17 MHz GBW, 120 dB AOL
+* Pinout: INP (1), INM (8), VCC (6), VEE (3), OUT (4)
+* =====================================================================
+.subckt LMP7721 INP INM VCC VEE OUT
+  * 1. Input Impedance & Parasitic Capacitances
+  C_DIFF INP INM 0.3p
+  C_CMP  INP 0   1.2p
+  C_CMM  INM 0   1.2p
+  R_IN   INP INM 1e14
+  R_CMP  INP 0   1e14
+  R_CMM  INM 0   1e14
+
+  * 2. Input Bias Current (3 fA typ)
+  I_BIAS_P INP 0 DC 3.0e-15
+  I_BIAS_M INM 0 DC 3.0e-15
+
+  * 3. Input Voltage Noise Generator (en = 6.5 nV/rtHz @ 10 kHz)
+  R_NOISE INP INT_INP 2560
+  C_NOISE INT_INP 0 100f
+
+  * 4. First Gain / Transconductance Stage (Gm = 10 mS)
+  G1 0 INT_G INT_INP INM 0.01
+
+  * 5. Dominant Pole Intermediate Stage
+  * AOL = Gm * R_INT = 0.01 * 100 MEG = 1e6 (120 dB)
+  * fp1 = 1 / (2*pi*R_INT*C_INT) -> GBW = Gm / (2*pi*C_INT) = 17 MHz
+  * C_INT = 0.01 / (2 * pi * 17e6) = 93.6 pF
+  R_INT INT_G 0 100MEG
+  C_INT INT_G 0 93.6p
+
+  * 6. Second High-Frequency Pole Stage (fp2 = 35 MHz for 60 deg phase margin)
+  E_STAGE2 INT_P2_IN 0 INT_G 0 1.0
+  R_P2 INT_P2_IN INT_P2 1.0k
+  C_P2 INT_P2 0 4.55p
+
+  * 7. Output Slew Rate Clamping & Rail-to-Rail Limiter
+  B_SAT INT_OUT 0 V = Max(Min(V(INT_P2), V(VCC) - 0.08), V(VEE) + 0.08)
+
+  * 8. Output Stage with 20 Ohm Open-Loop Drive Impedance
+  E_BUF OUT_INT 0 INT_OUT 0 1.0
+  R_OUT OUT_INT OUT 20.0
+.ends LMP7721
+
+
+* =====================================================================
+* Subcircuit: LTC6268 500 MHz Ultra-Low Bias Current FET Op-Amp
+* Manufacturer: Analog Devices / Linear Technology
+* Features: 500 MHz GBW, 400 V/us Slew Rate, 0.45 pF Cin, 90 dB AOL
+* Pinout: INP (3), INM (2), VCC (7), VEE (5), OUT (6)
+* =====================================================================
+.subckt LTC6268 INP INM VCC VEE OUT
+  * 1. Ultra-Low Input Capacitance
+  C_IN_DIFF INP INM 0.15p
+  C_IN_P    INP 0   0.45p
+  C_IN_M    INM 0   0.45p
+  R_IN      INP INM 1e13
+
+  * 2. High-Speed Transconductance Stage (Gm = 10 mS)
+  G1 0 INT_G INP INM 0.01
+
+  * 3. Dominant Pole Stage (AOL = 90 dB = 31622)
+  R_INT INT_G 0 3.162MEG
+  C_INT INT_G 0 3.183p
+
+  * 4. Second High-Frequency Pole Stage (fp2 = 800 MHz)
+  E_STAGE2 INT_P2_IN 0 INT_G 0 1.0
+  R_P2 INT_P2_IN INT_P2 500.0
+  C_P2 INT_P2 0 0.398p
+
+  * 5. Fast Rail-to-Rail Output Driver
+  B_OUT INT_OUT 0 V = Max(Min(V(INT_P2), V(VCC) - 0.12), V(VEE) + 0.12)
+  E_BUF OUT_INT 0 INT_OUT 0 1.0
+  R_OUT OUT_INT OUT 10.0
+.ends LTC6268
+
+
+* =====================================================================
+* Subcircuit: NANOPORE_WELL (Delrin Fluidic Cell Electrical Model)
+* =====================================================================
+.subckt NANOPORE_WELL TRANS CIS PAR_C = 1.2p R_WELL = 100MEG
+  C_MEMBRANE TRANS CIS {PAR_C}
+  R_MEMBRANE TRANS CIS {R_WELL}
+.ends NANOPORE_WELL

@@ -1,0 +1,65 @@
+metadata:
+  title: Corkscrew Filter - Fluidic & Sensor Interconnect
+  description: Cyclone separation fluidic piping, reject drain line, and differential pressure instrumentation
+  author: OpenAuto-CFD Team
+  version: 1.0.0
+
+options:
+  fontname: Arial
+  bgcolor: "#06090f"
+  bgcolor_connector: "#1e293b"
+  bgcolor_cable: "#0f172a"
+  color_mode: SHORT
+
+connectors:
+  INLET_MANIFOLD:
+    type: Tangential Cyclonic Inlet Port (1/4 NPT)
+    pinlabels: [SLURRY_FEED]
+
+  PERMEATE_OUTLET:
+    type: Vortex Core Filtrate Port (1/4-28 UNF)
+    notes: Clean filtrate delivery coupled to Daemon Pore reader well
+    pinlabels: [CLEAN_FILTRATE]
+
+  REJECT_OUTLET:
+    type: Concentrated Slurry Bottom Reject (3/8 Barbed)
+    pinlabels: [HEAVY_DEBRIS]
+
+  DP_TRANSDUCER:
+    type: Honeywell TruStability Differential Pressure Sensor
+    mpn: HSC-DIP-001PSI
+    notes: Real-time pressure drop monitoring across corkscrew helical insert
+    pinlabels: [HIGH_SIDE, LOW_SIDE, VDD, GND, I2C_SDA, I2C_SCL]
+
+cables:
+  PIPE_FEED:
+    category: bundle
+    type: Braided PU Pipe (1/4 OD x 0.170 ID)
+    gauge: 4.3 mm
+    length: 0.35 m
+    colors: [RD]
+    notes: High-pressure braided polyurethane slurry feed pipe
+
+  TUBE_PERMEATE:
+    category: bundle
+    type: FEP Microbore (1/16 OD x 0.030 ID)
+    gauge: 0.8 mm
+    length: 0.15 m
+    colors: [CY]
+    notes: Clean filtrate capillary link to nanopore flowcell
+
+  W_SENSOR_I2C:
+    gauge: 26 AWG
+    length: 0.20 m
+    colors: [RD, BK, YE, GN]
+    notes: 4-conductor I2C telemetry cable to microcontroller
+
+connections:
+  -
+    - INLET_MANIFOLD: 1
+    - PIPE_FEED: 1
+    - DP_TRANSDUCER: 1
+  -
+    - PERMEATE_OUTLET: 1
+    - TUBE_PERMEATE: 1
+    - DP_TRANSDUCER: 2

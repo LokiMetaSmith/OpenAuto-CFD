@@ -1,9 +1,9 @@
 """
 run_viewer.py
 
-CLI Launcher for Atlas Fields Studio Interactive WebGL Viewer.
+CLI Launcher for OpenAuto-CFD Interactive WebGL Viewer.
 Usage:
-  .venv\\Scripts\\python.exe run_viewer.py --port 8080 --domain cfd
+  .venv\Scripts\python.exe run_viewer.py --port 8080 --domain cfd
 """
 
 import os
@@ -20,7 +20,7 @@ from server import create_server
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Atlas Fields Studio Real-Time Viewer")
+    parser = argparse.ArgumentParser(description="OpenAuto-CFD Real-Time Viewer")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind server (default: 8080)")
     parser.add_argument("--domain", type=str, default="cfd", choices=["cfd", "fea", "joint", "em"], help="Physics domain (default: cfd)")
     parser.add_argument("--no-browser", action="store_true", help="Don't open browser automatically")
@@ -30,7 +30,7 @@ def main():
     url = f"http://127.0.0.1:{args.port}"
 
     print(f"\n=================================================================")
-    print(f"       ATLAS FIELDS STUDIO — REAL-TIME MULTI-PHYSICS STUDIO")
+    print(f"       OPENAUTO-CFD STUDIO — REAL-TIME MULTI-PHYSICS STUDIO")
     print(f"=================================================================")
     print(f"  Local WebGL URL : {url}")
     print(f"  Active Physics  : {args.domain.upper()}")
@@ -49,10 +49,10 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n[AtlasViewer] Shutting down server gracefully...")
+        print("\n[OpenAutoViewer] Shutting down server gracefully...")
         opt.shutdown()
         server.shutdown()
-        print("[AtlasViewer] Server stopped.")
+        print("[OpenAutoViewer] Server stopped.")
 
 
 if __name__ == "__main__":

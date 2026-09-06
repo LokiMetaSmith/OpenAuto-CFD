@@ -29,6 +29,7 @@ from cfd_fea_field_io import read_multiphysics_field_bin
 from cad_agent_tools import CADReasoningAgent, CADAgentToolRegistry
 from eda_agent_tools import EDAReasoningAgent, EDAAgentToolRegistry
 from eda_rf_driver import HighSpeedTransmissionLineEngine
+from container_detector import get_solver_status, attempt_start_podman
 import time
 import math
 import cmath
@@ -44,6 +45,95 @@ from nanopore_engine import NanoporeElectrophysiologyEngine
 from power_thermal_engine import PowerThermalEngine
 from drc_engine import DRCEngine
 from fdtd_engine import FullWaveFDTDEngine
+from fluidic_cosim_engine import FluidicNanoporeCosimEngine
+from spice_engine import SPICEEngine
+from kicad_ngspice_bridge import KiCadNgspiceEngine
+from build123d_engine import get_build123d_engine
+from electrophysiology_engine import get_electrophysiology_engine
+from clamping_physics import get_clamping_physics_engine
+from openfoam_microfluidics import get_microfluidic_cfd_engine
+try:
+    from wireviz_engine import get_wireviz_engine
+except ImportError:
+    from viewer.wireviz_engine import get_wireviz_engine
+
+import struct
+
+def parse_stl_to_float32_bytes(stl_path: str) -> Tuple[bytes, int]:
+    """Parses ASCII or Binary STL directly into packed IEEE 754 float32 byte array."""
+    verts = []
+    with open(stl_path, 'rb') as fb:
+        head = fb.read(80)
+    is_ascii = head.startswith(b'solid')
+    if is_ascii:
+        with open(stl_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith('vertex'):
+                    p = s.split()
+                    verts.extend([float(p[1]), float(p[2]), float(p[3])])
+    else:
+        with open(stl_path, 'rb') as f:
+            f.seek(80)
+            count_b = f.read(4)
+            if len(count_b) == 4:
+                count = struct.unpack('<I', count_b)[0]
+                for _ in range(count):
+                    data = struct.unpack('<12fH', f.read(50))
+                    for v in range(3):
+                        verts.extend([data[3 + v*3], data[3 + v*3 + 1], data[3 + v*3 + 2]])
+    if not verts:
+        return b'', 0
+    return struct.pack(f'<{len(verts)}f', *verts), len(verts) // 3
+
+
+def parse_dxf_polylines(dxf_path: str) -> Tuple[list, dict]:
+    """Parses LWPOLYLINE entities from a 2D DXF file into 2D polygon vertex loops."""
+    polylines = []
+    curr = []
+    in_entities = False
+    all_x, all_y = [], []
+    with open(dxf_path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = [line.strip() for line in f]
+    i = 0
+    while i < len(lines):
+        if lines[i] == 'ENTITIES':
+            in_entities = True
+        if in_entities and lines[i] == 'LWPOLYLINE':
+            if curr:
+                polylines.append(curr)
+                curr = []
+        elif in_entities and curr is not None and lines[i] == '10':
+            try:
+                x = float(lines[i+1])
+                if i+2 < len(lines) and lines[i+2] == '20':
+                    y = float(lines[i+3])
+                    curr.append([x, y])
+                    all_x.append(x)
+                    all_y.append(y)
+                    i += 3
+            except (ValueError, IndexError):
+                pass
+        i += 1
+    if curr:
+        polylines.append(curr)
+
+    bounds = {
+        "min_x": min(all_x) if all_x else 0.0,
+        "max_x": max(all_x) if all_x else 0.0,
+        "min_y": min(all_y) if all_y else 0.0,
+        "max_y": max(all_y) if all_y else 0.0,
+        "width": (max(all_x) - min(all_x)) if all_x else 0.0,
+        "height": (max(all_y) - min(all_y)) if all_y else 0.0
+    }
+    return polylines, bounds
+
+
+try:
+    from project_engine import ProjectManager
+except ImportError:
+    from viewer.project_engine import ProjectManager
+
 
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
@@ -60,6 +150,8 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
     optimizer: Optional[MultiPhysicsModelFusionOptimizer] = None
     kicad_state: Optional[Dict[str, Any]] = None
+    project_manager: Optional[ProjectManager] = None
+    geometry_cache: Dict[str, bytes] = {}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
@@ -75,6 +167,21 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
+        self.wfile.flush()
+
+    def _send_binary(self, data: bytes, content_type: str = "application/octet-stream", status_code: int = 200, extra_headers: dict = None):
+        self.send_response(status_code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, str(v))
+        self.end_headers()
+        self.wfile.write(data)
         self.wfile.flush()
 
     def do_OPTIONS(self):
@@ -132,6 +239,31 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(bin_data)
             else:
                 self._send_json({"error": "No binary field buffer available yet"}, 404)
+
+        elif path == "/api/projects":
+            pm = self.project_manager
+            if pm:
+                self._send_json({
+                    "projects": pm.list_projects(),
+                    "active_project_id": pm.active_project_id
+                })
+            else:
+                self._send_json({"projects": [], "active_project_id": None})
+
+        elif path == "/api/project/active":
+            pm = self.project_manager
+            if pm:
+                proj = pm.get_active_project()
+                if proj:
+                    self._send_json({
+                        "project": proj.to_dict(),
+                        "active_board_id": proj.active_board_id,
+                        "active_board": proj.get_active_board()
+                    })
+                else:
+                    self._send_json({"error": "No active project"}, 404)
+            else:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
 
         elif path == "/api/kicad_status":
             state = self.kicad_state or {
@@ -356,6 +488,313 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
             )
             self._send_json(fdtd_res)
 
+        elif path == "/api/fluidic_cosim":
+            query = urllib.parse.parse_qs(parsed.query)
+            eff_pct = float(query.get("eff", query.get("efficiency", [99.96]))[0])
+            dp_psi = float(query.get("dp_psi", query.get("pressure_drop_psi", [0.42]))[0])
+            bias_mv = float(query.get("bias_mv", [100.0])[0])
+            pore_diam = float(query.get("pore_diam_nm", [4.0])[0])
+
+            cosim_engine = FluidicNanoporeCosimEngine()
+            cosim_res = cosim_engine.simulate_cosimulation(
+                filter_efficiency_pct=eff_pct,
+                pressure_drop_psi=dp_psi,
+                bias_voltage_mv=bias_mv,
+                pore_diameter_nm=pore_diam
+            )
+            self._send_json(cosim_res)
+
+        elif path == "/api/spice_monte_carlo":
+            query = urllib.parse.parse_qs(parsed.query)
+            num_runs = int(query.get("runs", query.get("num_runs", [500]))[0])
+            r_tol = float(query.get("r1_tol", query.get("r_tol_pct", [1.0]))[0])
+            c_tol = float(query.get("c1_tol", query.get("c_tol_pct", [5.0]))[0])
+            par_tol = float(query.get("par_tol_pct", [10.0])[0])
+
+            spice_engine = SPICEEngine()
+            mc_res = spice_engine.run_monte_carlo(
+                num_runs=num_runs,
+                r1_tolerance_pct=r_tol,
+                c1_tolerance_pct=c_tol,
+                parasitic_tolerance_pct=par_tol
+            )
+            mc_res["netlist"] = spice_engine.generate_spice_netlist()
+            self._send_json(mc_res)
+
+        elif path == "/api/kicad_native_spice":
+            query = urllib.parse.parse_qs(parsed.query)
+            analysis = query.get("analysis", ["ac"])[0]
+            r1 = float(query.get("r1_mohm", [1.0])[0])
+            c1 = float(query.get("c1_pf", [2.0])[0])
+            c_par = float(query.get("c_par_pf", [1.2])[0])
+
+            try:
+                engine = KiCadNgspiceEngine()
+                if analysis == "tran":
+                    dwell = float(query.get("dwell_us", [50.0])[0])
+                    amp = float(query.get("pulse_amp_na", [1.0])[0])
+                    res = engine.run_transient_pulse(r1_mohm=r1, c1_pf=c1, pulse_amp_na=amp, dwell_us=dwell)
+                else:
+                    res = engine.run_ac_bode(r1_mohm=r1, c1_pf=c1, c_par_pf=c_par)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e), "engine": "KiCad ngspice error"}, 500)
+
+        elif path == "/api/container_status":
+            query = urllib.parse.parse_qs(parsed.query)
+            refresh = query.get("refresh", ["false"])[0].lower() in ["true", "1", "yes"]
+            try:
+                status = get_solver_status(force_refresh=refresh)
+                self._send_json(status)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/build123d_assembly":
+            query = urllib.parse.parse_qs(parsed.query)
+            mode = query.get("mode", ["cartridge"])[0]
+            try:
+                explode = float(query.get("explode", [0.0])[0])
+            except (ValueError, TypeError):
+                explode = 0.0
+            try:
+                engine = get_build123d_engine()
+                manifest = engine.get_assembly_manifest(mode=mode, explode=explode)
+                self._send_json(manifest)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/build123d_part":
+            query = urllib.parse.parse_qs(parsed.query)
+            part_id = query.get("part_name", [None])[0] or query.get("part_id", [None])[0]
+            try:
+                tolerance = float(query.get("tolerance", [0.1])[0])
+            except (ValueError, TypeError):
+                tolerance = 0.1
+            if not part_id:
+                self._send_json({"error": "Missing part_id or part_name parameter"}, 400)
+                return
+            try:
+                engine = get_build123d_engine()
+                res = engine.get_part_mesh_binary(part_id, tolerance=tolerance)
+                if not res:
+                    self._send_json({"error": f"Part '{part_id}' failed to generate or not found"}, 404)
+                    return
+                buf, v_count = res
+                self._send_binary(buf, "application/octet-stream", extra_headers={"X-Vertex-Count": v_count})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/nanopore/live_trace":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                auto_prob = float(query.get("auto_event", [0.08])[0])
+            except (ValueError, TypeError):
+                auto_prob = 0.08
+            try:
+                ep = get_electrophysiology_engine()
+                data = ep.step_simulation(n_steps=12, auto_event_prob=auto_prob)
+                self._send_json(data)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/build123d_export":
+            query = urllib.parse.parse_qs(parsed.query)
+            part_id = query.get("part_id", [None])[0] or query.get("part_name", [None])[0]
+            fmt = query.get("format", ["step"])[0].lower()
+            if not part_id:
+                self._send_json({"error": "Missing part_id"}, 400)
+                return
+            try:
+                engine = get_build123d_engine()
+                res = engine.export_part_file(part_id, fmt=fmt)
+                if not res:
+                    self._send_json({"error": f"Part '{part_id}' export failed"}, 404)
+                    return
+                data, filename, mime = res
+                self._send_binary(data, mime, extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/clamping_analysis":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                torque = float(query.get("torque", [0.5])[0])
+            except (ValueError, TypeError):
+                torque = 0.5
+            try:
+                cp = get_clamping_physics_engine()
+                res = cp.calculate_clamping(torque_nm=torque)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/microfluidics/flow_physics":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                q = float(query.get("flow_rate", [10.0])[0])
+            except (ValueError, TypeError):
+                q = 10.0
+            try:
+                cfd = get_microfluidic_cfd_engine()
+                res = cfd.calculate_flow_physics(flow_rate_ul_min=q)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/harness":
+            query = urllib.parse.parse_qs(parsed.query)
+            proj_id = query.get("project_id", [None])[0] or "daemon-pore"
+            h_type = query.get("type", ["electrical"])[0]
+            try:
+                we = get_wireviz_engine()
+                yaml_txt = we.get_project_harness(proj_id, h_type)
+                self._send_json({"project_id": proj_id, "type": h_type, "yaml": yaml_txt})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/harness/export":
+            query = urllib.parse.parse_qs(parsed.query)
+            proj_id = query.get("project_id", [None])[0] or "daemon-pore"
+            h_type = query.get("type", ["electrical"])[0]
+            fmt = query.get("format", ["svg"])[0].lower()
+            try:
+                we = get_wireviz_engine()
+                yaml_txt = we.get_project_harness(proj_id, h_type)
+                exp = we.export_harness(yaml_txt, fmt=fmt)
+                if not exp:
+                    self._send_json({"error": f"Export format '{fmt}' failed"}, 400)
+                    return
+                data_bytes, filename, mime = exp
+                self._send_binary(data_bytes, mime, extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/mesh_binary":
+            query = urllib.parse.parse_qs(parsed.query)
+            proj_id = query.get("project_id", [None])[0]
+            part_id = query.get("part_id", [None])[0]
+            rel_file = query.get("file", [None])[0]
+
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+
+            proj = pm.projects.get(proj_id) if proj_id else pm.get_active_project()
+            if not proj:
+                self._send_json({"error": f"Project '{proj_id}' not found"}, 404)
+                return
+
+            file_path = None
+            if part_id:
+                for p in proj.mechanical_parts:
+                    if p.get("id") == part_id:
+                        file_path = p.get("path")
+                        break
+            elif rel_file:
+                file_path = os.path.abspath(os.path.join(proj.project_dir, rel_file))
+
+            if not file_path or not os.path.exists(file_path):
+                self._send_json({"error": f"Part file not found: {file_path}"}, 404)
+                return
+
+            cache_key = f"{file_path}_{os.path.getmtime(file_path)}"
+            if cache_key in MultiPhysicsViewerHandler.geometry_cache:
+                buf = MultiPhysicsViewerHandler.geometry_cache[cache_key]
+                self._send_binary(buf, "application/octet-stream")
+                return
+
+            try:
+                buf, v_count = parse_stl_to_float32_bytes(file_path)
+                MultiPhysicsViewerHandler.geometry_cache[cache_key] = buf
+                self._send_binary(buf, "application/octet-stream", extra_headers={"X-Vertex-Count": v_count})
+            except Exception as e:
+                self._send_json({"error": f"Failed to parse STL: {str(e)}"}, 500)
+
+        elif path == "/api/project/dxf_polylines":
+            query = urllib.parse.parse_qs(parsed.query)
+            proj_id = query.get("project_id", [None])[0]
+            part_id = query.get("part_id", [None])[0]
+            rel_file = query.get("file", [None])[0]
+
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+
+            proj = pm.projects.get(proj_id) if proj_id else pm.get_active_project()
+            if not proj:
+                self._send_json({"error": f"Project '{proj_id}' not found"}, 404)
+                return
+
+            file_path = None
+            if part_id:
+                for p in proj.mechanical_parts:
+                    if p.get("id") == part_id:
+                        file_path = p.get("path")
+                        break
+            elif rel_file:
+                file_path = os.path.abspath(os.path.join(proj.project_dir, rel_file))
+
+            if not file_path or not os.path.exists(file_path):
+                self._send_json({"error": f"DXF file not found: {file_path}"}, 404)
+                return
+
+            try:
+                polys, bounds = parse_dxf_polylines(file_path)
+                self._send_json({
+                    "file": os.path.basename(file_path),
+                    "relative_path": rel_file or os.path.relpath(file_path, proj.project_dir),
+                    "loops": polys,
+                    "bounds": bounds
+                })
+            except Exception as e:
+                self._send_json({"error": f"Failed to parse DXF: {str(e)}"}, 500)
+
+        elif path == "/api/project/cad_file":
+            query = urllib.parse.parse_qs(parsed.query)
+            proj_id = query.get("project_id", [None])[0]
+            part_id = query.get("part_id", [None])[0]
+            rel_file = query.get("file", [None])[0]
+
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+
+            proj = pm.projects.get(proj_id) if proj_id else pm.get_active_project()
+            if not proj:
+                self._send_json({"error": f"Project '{proj_id}' not found"}, 404)
+                return
+
+            file_path = None
+            if part_id:
+                for p in proj.mechanical_parts:
+                    if p.get("id") == part_id:
+                        file_path = p.get("path")
+                        break
+            elif rel_file:
+                file_path = os.path.abspath(os.path.join(proj.project_dir, rel_file))
+
+            if not file_path or not os.path.exists(file_path):
+                self._send_json({"error": f"CAD file not found: {file_path}"}, 404)
+                return
+
+            try:
+                ext = os.path.splitext(file_path)[1].lower()
+                mime = "application/octet-stream"
+                if ext == ".stl":
+                    mime = "model/stl"
+                elif ext == ".dxf":
+                    mime = "application/dxf"
+                elif ext in [".scad", ".txt", ".json"]:
+                    mime = "text/plain"
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                self._send_binary(content, mime)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
         else:
             super().do_GET()
 
@@ -470,21 +909,56 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
             opt.inverse_designer.domain = new_domain
             self._send_json({"status": "switched", "domain": new_domain})
 
+        elif path == "/api/container_start":
+            res = attempt_start_podman()
+            self._send_json(res)
+
         elif path == "/api/agent_chat":
             message = payload.get("message", "").strip()
+            domain = payload.get("domain", "").strip().lower()
             current_params = payload.get("params", {})
             fidelity = payload.get("fidelity", "tier1")
 
+            eda_keywords = [
+                "pcb", "kicad", "trace", "microstrip", "rf", "impedance", "coplanar",
+                "spice", "power", "current", "voltage", "thermal", "drc", "ir drop",
+                "netlist", "draw", "amp", "decoupling", "ground", "layer", "stackup",
+                "tdr", "crosstalk", "bode", "transient", "electrophysiology", "tia",
+                "monte carlo", "dielectric", "via", "resistance", "capacitance", "rail"
+            ]
             msg_lower = message.lower()
-            if any(k in msg_lower for k in ["pcb", "kicad", "trace", "microstrip", "rf", "impedance", "coplanar"]):
+            is_eda = (domain == "pcb") or any(k in msg_lower for k in eda_keywords)
+
+            if is_eda:
                 eda_agent = EDAReasoningAgent()
-                result = eda_agent.run_goal(message)
+                board_context = None
+                pm = self.project_manager
+                if pm:
+                    active_proj = pm.get_active_project()
+                    if active_proj:
+                        active_board = active_proj.get_active_board() or {}
+                        board_context = {
+                            "board_id": active_proj.active_board_id,
+                            "board_name": active_board.get("name", active_proj.active_board_id),
+                            "project_id": active_proj.project_id,
+                            "project_name": active_proj.name
+                        }
+                if not board_context and self.kicad_state:
+                    board_context = {
+                        "board_id": self.kicad_state.get("board_id", "amplifier"),
+                        "board_name": self.kicad_state.get("board_name", "Amplifier TIA"),
+                        "board_path": self.kicad_state.get("board_path")
+                    }
+                result = eda_agent.run_goal(message, board_context=board_context)
                 self._send_json({
                     "status": "success",
                     "agent_type": "EDA_RF_Agent",
                     "reply": result.get("summary", "EDA analysis complete."),
                     "trace": result.get("trace", []),
                     "kicad_path": result.get("kicad_pcb_path") or result.get("kicad_path"),
+                    "updated_power": result.get("updated_power"),
+                    "spice_netlist": result.get("spice_netlist"),
+                    "board_context": board_context,
                     "timestamp": time.time()
                 })
             else:
@@ -509,6 +983,71 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                     "timestamp": time.time()
                 })
 
+        elif path == "/api/project/select":
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+            project_id = payload.get("project_id")
+            if not project_id:
+                self._send_json({"error": "project_id is required"}, 400)
+                return
+            try:
+                res = pm.select_project(project_id)
+                if res.get("board_sync"):
+                    MultiPhysicsViewerHandler.kicad_state = res["board_sync"]
+                    MultiPhysicsViewerHandler.kicad_state["connected"] = True
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 400)
+
+        elif path == "/api/project/switch_board":
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+            board_id = payload.get("board_id")
+            if not board_id:
+                self._send_json({"error": "board_id is required"}, 400)
+                return
+            try:
+                res = pm.select_board(board_id)
+                if res.get("board_sync"):
+                    MultiPhysicsViewerHandler.kicad_state = res["board_sync"]
+                    MultiPhysicsViewerHandler.kicad_state["connected"] = True
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 400)
+
+        elif path == "/api/project/create":
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+            name = payload.get("name")
+            if not name:
+                self._send_json({"error": "Project name is required"}, 400)
+                return
+            try:
+                res = pm.create_project(
+                    name=name,
+                    project_id=payload.get("project_id"),
+                    project_dir=payload.get("project_dir"),
+                    description=payload.get("description", ""),
+                    board_name=payload.get("board_name", "Main PCB"),
+                    board_filename=payload.get("board_filename", "board.kicad_pcb"),
+                    substrate_material=payload.get("substrate_material", "FR4 High-TG"),
+                    substrate_er=float(payload.get("substrate_er", 4.3)),
+                    substrate_thickness_mm=float(payload.get("substrate_thickness_mm", 1.6)),
+                    mechanical_parts=payload.get("mechanical_parts")
+                )
+                if res.get("board_sync"):
+                    MultiPhysicsViewerHandler.kicad_state = res["board_sync"]
+                    MultiPhysicsViewerHandler.kicad_state["connected"] = True
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 400)
+
         elif path == "/api/kicad_sync":
             MultiPhysicsViewerHandler.kicad_state = payload
             MultiPhysicsViewerHandler.kicad_state["server_received_timestamp"] = time.time()
@@ -522,6 +1061,8 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/kicad_update_trace":
             board_path = payload.get("board_path")
+            if not board_path and self.project_manager:
+                board_path = self.project_manager.get_active_board_path()
             if not board_path:
                 if MultiPhysicsViewerHandler.kicad_state:
                     board_path = MultiPhysicsViewerHandler.kicad_state.get("board_path")
@@ -543,8 +1084,11 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
             if mod_res.get("success"):
                 try:
-                    daemon = EMLiveSyncDaemon(board_path)
-                    sync_payload = daemon.trigger_sync()
+                    if self.project_manager:
+                        sync_payload = self.project_manager.trigger_active_board_sync()
+                    else:
+                        daemon = EMLiveSyncDaemon(board_path)
+                        sync_payload = daemon.trigger_sync()
                     if sync_payload:
                         MultiPhysicsViewerHandler.kicad_state = sync_payload
                         MultiPhysicsViewerHandler.kicad_state["connected"] = True
@@ -557,6 +1101,8 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/kicad_autofix_drc":
             violation_id = payload.get("violation_id", "DRC-AT-1")
             board_path = payload.get("board_path")
+            if not board_path and self.project_manager:
+                board_path = self.project_manager.get_active_board_path()
             if not board_path:
                 if MultiPhysicsViewerHandler.kicad_state:
                     board_path = MultiPhysicsViewerHandler.kicad_state.get("board_path")
@@ -572,8 +1118,11 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
             if fix_res.get("success"):
                 try:
-                    daemon = EMLiveSyncDaemon(board_path)
-                    sync_payload = daemon.trigger_sync()
+                    if self.project_manager:
+                        sync_payload = self.project_manager.trigger_active_board_sync()
+                    else:
+                        daemon = EMLiveSyncDaemon(board_path)
+                        sync_payload = daemon.trigger_sync()
                     if sync_payload:
                         MultiPhysicsViewerHandler.kicad_state = sync_payload
                         MultiPhysicsViewerHandler.kicad_state["connected"] = True
@@ -582,6 +1131,74 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                     fix_res["sync_warning"] = str(e)
 
             self._send_json(fix_res)
+
+        elif path == "/api/nanopore/trigger_translocation":
+            analyte = payload.get("analyte", "dsDNA")
+            duration_us = payload.get("duration_us", None)
+            if duration_us is not None:
+                try:
+                    duration_us = float(duration_us)
+                except (ValueError, TypeError):
+                    duration_us = None
+            try:
+                ep = get_electrophysiology_engine()
+                ev = ep.trigger_translocation_event(analyte=analyte, duration_us=duration_us)
+                self._send_json({"success": True, "event": ev})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/project/build123d_update_params":
+            try:
+                engine = get_build123d_engine()
+                res = engine.update_parameters(payload)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/harness/render":
+            yaml_txt = payload.get("yaml", "")
+            proj_id = payload.get("project_id", "daemon-pore")
+            h_type = payload.get("type", "electrical")
+            try:
+                we = get_wireviz_engine()
+                if not yaml_txt or not yaml_txt.strip():
+                    yaml_txt = we.get_project_harness(proj_id, h_type)
+                res = we.render_harness(yaml_txt)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, 500)
+
+        elif path == "/api/project/harness/save":
+            yaml_txt = payload.get("yaml", "")
+            proj_id = payload.get("project_id", "daemon-pore")
+            h_type = payload.get("type", "electrical")
+            if not yaml_txt:
+                self._send_json({"error": "Missing yaml content"}, 400)
+                return
+            try:
+                we = get_wireviz_engine()
+                ok = we.save_project_harness(proj_id, h_type, yaml_txt)
+                self._send_json({"status": "ok" if ok else "error"})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/harness/export":
+            yaml_txt = payload.get("yaml", "")
+            proj_id = payload.get("project_id", "daemon-pore")
+            h_type = payload.get("type", "electrical")
+            fmt = payload.get("format", "svg").lower()
+            try:
+                we = get_wireviz_engine()
+                if not yaml_txt or not yaml_txt.strip():
+                    yaml_txt = we.get_project_harness(proj_id, h_type)
+                exp = we.export_harness(yaml_txt, fmt=fmt)
+                if not exp:
+                    self._send_json({"error": f"Export format '{fmt}' failed"}, 400)
+                    return
+                data_bytes, filename, mime = exp
+                self._send_binary(data_bytes, mime, extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
 
         else:
             self._send_json({"error": f"Unknown endpoint {path}"}, 404)
@@ -630,6 +1247,32 @@ def create_server(
             opt.step(candidate_params=p, mock_run=True)
 
     MultiPhysicsViewerHandler.optimizer = opt
+
+    try:
+        pm = ProjectManager(server_url=f"http://127.0.0.1:{port}")
+        MultiPhysicsViewerHandler.project_manager = pm
+        sync_data = pm.trigger_active_board_sync()
+        if sync_data:
+            MultiPhysicsViewerHandler.kicad_state = sync_data
+            MultiPhysicsViewerHandler.kicad_state["connected"] = True
+            active_proj = pm.get_active_project()
+            proj_name = active_proj.name if active_proj else "None"
+            board_id = active_proj.active_board_id if active_proj else "None"
+            print(f"[ViewerServer] ProjectManager active: '{proj_name}' (board: '{board_id}')")
+    except Exception as e:
+        print(f"[ViewerServer] ProjectManager initialization note: {e}")
+        if MultiPhysicsViewerHandler.kicad_state is None and os.path.exists(DEFAULT_BOARD_PATH):
+            try:
+                from em_live_watcher import EMLiveSyncDaemon
+                daemon = EMLiveSyncDaemon(DEFAULT_BOARD_PATH, server_url=f"http://127.0.0.1:{port}")
+                sync_data = daemon.trigger_sync()
+                if sync_data:
+                    MultiPhysicsViewerHandler.kicad_state = sync_data
+                    MultiPhysicsViewerHandler.kicad_state["connected"] = True
+                    print(f"[ViewerServer] Pre-loaded KiCad board state from {DEFAULT_BOARD_PATH}")
+            except Exception as ex:
+                print(f"[ViewerServer] KiCad fallback sync note: {ex}")
+
     server = ThreadedHTTPServer(("0.0.0.0", port), MultiPhysicsViewerHandler)
     return server, opt
 
@@ -644,7 +1287,7 @@ if __name__ == "__main__":
 
     server, opt = create_server(port=port, domain="cfd")
     print(f"\n=======================================================")
-    print(f"  Atlas Fields Studio Real-Time Viewer Server Active")
+    print(f"  OpenAuto-CFD Studio Real-Time Viewer Server Active")
     print(f"  URL: http://127.0.0.1:{port}")
     print(f"  Physics Domain: {opt.domain.upper()}")
     print(f"=======================================================\n")

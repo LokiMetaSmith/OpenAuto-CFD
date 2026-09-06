@@ -10,7 +10,7 @@ By leveraging a universal Configuration-Driven Architecture (via YAML Problem De
 *   **KiCad 10 Action Plugin (OpenAuto EM Live Bridge)**: Official KiCad 10/9/8/7 `pcbnew.ActionPlugin` creating an instant electromagnetic feedback loop (<100 ms). Modifying traces on the PCB canvas and saving (`Ctrl+S`) automatically recalculates controlled impedance ($Z_0, Z_{diff}$), S-parameters ($S_{11}, S_{21}$), and regenerates HyperLynx (`.hyp`) and openEMS FDTD models.
 *   **EDA, Chip Design & RF Transmission Line Synthesis**: Wheeler and Hammerstad conformal mapping for microstrip and coupled differential pairs with finite copper thickness, frequency-dependent skin depth attenuation, and automated `.kicad_pcb` layout generation.
 *   **Multi-Physics Surrogate & Model Fusion**: Universal RBF surrogate supporting coupled CFD (OpenFOAM), FEA structural stress (CalculiX), and EM (openEMS) metrics with 3D spatial vector fields and binary GPU buffer export.
-*   **Real-Time Interactive WebGL Viewer (Atlas-Style HUD)**: Modern Three.js dark-mode HUD with 60 FPS real-time parameter scrub, swirling particle ribbons, FEA stress heatmaps, AI inverse design controls, and KiCad EM sync toast alerts.
+*   **Real-Time Interactive WebGL Viewer (OpenAuto-CFD Studio HUD)**: Modern Three.js dark-mode HUD with 60 FPS real-time parameter scrub, swirling particle ribbons, FEA stress heatmaps, AI inverse design controls, and KiCad EM sync toast alerts.
 *   **Multi-Fidelity Mesh Pyramid**: Kennedy & O'Hagan Co-Kriging model ($y_H = \rho y_L + \delta(x)$) with dynamic mesh resolution switching and a Two-Stage Active Screening Filter delivering a $2.9\times$ compute speedup.
 *   **Physics-Informed Conservation Regularizer (PINN)**: Discrete Exterior Calculus Helmholtz-Hodge solenoidal projector $(D D^T) \boldsymbol{\lambda} = D \mathbf{u}$ enforcing incompressibility continuity ($\nabla \cdot \mathbf{u} = 0$) with $100\%$ divergence elimination in $<25\text{ ms}$, plus Cauchy stress divergence equilibrium ($\nabla \cdot \boldsymbol{\sigma} \approx \mathbf{0}$).
 *   **LLM Tool-Calling CAD & EDA Reasoning Agents**: Exposes standard OpenAPI / JSON Schema function-calling tools (`predict_surrogate`, `run_inverse_design`, `optimize_trace_impedance`, `evaluate_rf_transmission`, `generate_kicad_pcb`, `generate_scad_code`) for autonomous multi-turn engineering reasoning.
@@ -101,9 +101,9 @@ To configure with Claude Desktop (`claude_desktop_config.json`):
 
 This project includes a base case setup for running a CFD simulation using OpenFOAM. For detailed instructions on how to set up and run the simulation, please see the [README.md in the `corkscrewFilter` directory](./corkscrewFilter/README.md).
 
-### 5. Launching the Real-Time Interactive WebGL Viewer (Atlas HUD)
+### 5. Launching the Real-Time Interactive WebGL Viewer (OpenAuto-CFD Studio)
 
-To launch the real-time browser-based Atlas 3D simulation viewer:
+To launch the real-time browser-based OpenAuto-CFD 3D simulation viewer:
 ```bash
 python run_viewer.py
 ```

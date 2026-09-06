@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Atlas Fields Studio — Corkscrew Multi-Physics</title>
+  <title>OpenAuto-CFD Studio — Multiphysics Engineering Suite</title>
   <link rel="stylesheet" href="viewer.css">
   <!-- Three.js & OrbitControls -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -15,28 +15,43 @@
     <header id="top-bar">
       <div class="brand">
         <div class="brand-icon"></div>
-        <div class="brand-title">Atlas Fields Studio</div>
-        <div class="brand-tag">SURROGATE 3.0</div>
+        <div class="brand-title">OpenAuto-CFD</div>
+        <div class="brand-tag">STUDIO 3.0</div>
+      </div>
+
+      <!-- Multiphysics Project Selector -->
+      <div class="project-selector-wrapper" style="display: flex; align-items: center; gap: 6px; margin-left: 14px; margin-right: 10px;">
+        <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Project:</span>
+        <select id="project-select" class="tool-btn" style="padding: 5px 10px; font-size: 12px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(0, 240, 255, 0.35); border-radius: 6px; color: var(--accent-cyan); font-weight: 600; cursor: pointer; outline: none;" onchange="handleProjectSelectChange(this.value)">
+          <option value="daemon-pore">Daemon Pore • Nanopore Reader</option>
+          <option value="corkscrew-filter">Corkscrew Filter • Cyclone</option>
+          <option value="__ADD_NEW__" style="color: var(--accent-emerald); font-weight: bold;">➕ Add New Project...</option>
+        </select>
+        <button id="btn-add-project" class="tool-btn" style="padding: 3px 8px; font-size: 14px; line-height: 1; font-weight: bold; color: var(--accent-cyan); border: 1px solid rgba(0, 240, 255, 0.4); border-radius: 6px; background: rgba(0, 240, 255, 0.08); cursor: pointer;" onclick="openNewProjectModal()" title="Add / Import New Project">+</button>
       </div>
 
       <div class="domain-tabs">
-        <button class="domain-btn active" data-domain="cfd" onclick="switchDomain('cfd')">CFD Fluid</button>
-        <button class="domain-btn" data-domain="fea" onclick="switchDomain('fea')">FEA Stress</button>
-        <button class="domain-btn" data-domain="joint" onclick="switchDomain('joint')">Joint Multi-Physics</button>
-        <button class="domain-btn" data-domain="em" onclick="switchDomain('em')">EM Phasor</button>
-        <button class="domain-btn" id="btn-domain-pcb" data-domain="pcb" onclick="switchDomain('pcb')">⚡ KiCad PCB 3D</button>
+        <button class="domain-btn active" data-domain="cfd" onclick="switchDomain('cfd')">CFD</button>
+        <button class="domain-btn" data-domain="fea" onclick="switchDomain('fea')">FEA</button>
+        <button class="domain-btn" data-domain="joint" onclick="switchDomain('joint')">Joint Sim</button>
+        <button class="domain-btn" data-domain="em" onclick="switchDomain('em')">EM Fields</button>
+        <button class="domain-btn" id="btn-domain-pcb" data-domain="pcb" onclick="switchDomain('pcb')">⚡ PCB 3D</button>
       </div>
 
       <div class="fidelity-selector">
         <span class="fidelity-label">Tier:</span>
-        <button id="btn-fidelity-t1" class="fidelity-btn active" onclick="setFidelity('tier1')">T1: Surrogate (2ms)</button>
-        <button id="btn-fidelity-t2" class="fidelity-btn" onclick="setFidelity('tier2')">T2: Fine Mesh CFD</button>
+        <button id="btn-fidelity-t1" class="fidelity-btn active" onclick="setFidelity('tier1')">T1: Fast Surrogate</button>
+        <button id="btn-fidelity-t2" class="fidelity-btn" onclick="setFidelity('tier2')">T2: High-Fi CFD</button>
       </div>
 
       <div class="top-telemetry">
+        <div id="container-status-badge" class="container-badge standby" onclick="openComputeStatusModal()" style="cursor: pointer;" title="Click to view Compute & Container Engine Status">
+          <div class="container-dot"></div>
+          <span id="container-status-text">Containers: Checking...</span>
+        </div>
         <div id="kicad-sync-badge" class="kicad-badge standby" onclick="switchDomain('pcb')" style="cursor: pointer;" title="Click to view 3D KiCad PCB Live">
           <div class="kicad-dot"></div>
-          <span id="kicad-sync-text">KiCad: Standby</span>
+          <span id="kicad-sync-text">KiCad Standby</span>
         </div>
         <div class="status-badge">
           <div class="status-dot"></div>
@@ -55,29 +70,60 @@
       <aside class="drawer drawer-left">
         <!-- CFD/CAD Sliders Container -->
         <div id="cfd-panel">
-          <div class="section-header">Geometric Parameters</div>
+          <div class="section-header">Parameters</div>
           <div id="sliders-container">
             <!-- Dynamic parameter sliders injected here -->
           </div>
 
-          <div class="section-header" style="margin-top: 12px;">Active Optimization</div>
+          <div class="section-header" style="margin-top: 12px;">Optimization</div>
           <button class="action-btn btn-optimize" onclick="triggerInverseDesign()">
             <span>⚡</span>
-            <span>AI Inverse Design (L-BFGS-B)</span>
+            <span>AI Inverse Design</span>
           </button>
           <button class="action-btn btn-dispatch" onclick="dispatchBackgroundSolver()">
             <span>▶</span>
-            <span>Dispatch Ground-Truth Solver</span>
+            <span>Dispatch Solver</span>
           </button>
+
+          <!-- Daemon Clamping & Sealing Inspector -->
+          <div id="daemon-clamping-panel" style="display: none; margin-top: 14px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 8px; padding: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span style="font-size: 11px; font-weight: bold; color: var(--accent-cyan);">CLAMPING &amp; SEALING</span>
+              <span id="clamping-status-badge" style="font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px; background: rgba(16, 185, 129, 0.2); color: #10b981;">OPTIMAL</span>
+            </div>
+            <div style="font-size: 11px; margin-bottom: 6px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                <span>Cap Clamping Torque:</span>
+                <span id="clamping-torque-val" style="font-weight: bold; color: #fff;">0.50 N·m</span>
+              </div>
+              <input type="range" id="clamping-torque-slider" min="0.1" max="1.5" step="0.05" value="0.5" style="width: 100%;" oninput="updateClampingTorque(this.value)" />
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6;">
+              <div style="display: flex; justify-content: space-between;"><span>Clamp Force:</span><span id="clamping-force-disp" style="color: #fff; font-weight: 600;">33.3 N</span></div>
+              <div style="display: flex; justify-content: space-between;"><span>Sealing Pressure:</span><span id="clamping-pressure-disp" style="color: #fff; font-weight: 600;">0.017 MPa</span></div>
+              <div style="display: flex; justify-content: space-between;"><span>Silicone Comp:</span><span id="clamping-comp-disp" style="color: #fff; font-weight: 600;">0.018 mm (1.1%)</span></div>
+              <div style="display: flex; justify-content: space-between;"><span>Microfluidic Re:</span><span id="cfd-re-disp" style="color: var(--accent-cyan); font-weight: 600;">0.12 (Stokes)</span></div>
+            </div>
+          </div>
         </div>
 
         <!-- KiCad PCB RF Inspector Container -->
         <div id="kicad-panel" style="display: none;">
-          <div class="section-header">KiCad PCB RF Inspector</div>
+          <div class="section-header">RF &amp; PCB Inspector</div>
+
+          <!-- Board Selector Tabs -->
+          <div id="board-selector-container" style="display: flex; gap: 6px; margin-bottom: 12px; background: rgba(255,255,255,0.03); padding: 4px; border-radius: 8px; border: 1px solid var(--border-subtle);">
+            <button id="board-tab-amplifier" class="fidelity-btn active" style="flex: 1; padding: 6px 4px; font-size: 11px; text-align: center;" onclick="switchActiveBoard('amplifier')">🔬 Amplifier (TIA)</button>
+            <button id="board-tab-mr1" class="fidelity-btn" style="flex: 1; padding: 6px 4px; font-size: 11px; text-align: center;" onclick="switchActiveBoard('mr1')">💻 MR1 (Motherboard)</button>
+          </div>
+
           <div style="background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 8px; padding: 10px; margin-bottom: 12px;">
-            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">ACTIVE BOARD</div>
-            <div id="kicad-board-name-display" style="font-weight: bold; color: var(--text-main); font-size: 13px;">amplifier.kicad_pcb</div>
-            <div id="kicad-board-dim-display" style="font-size: 11px; color: var(--accent-cyan); margin-top: 2px;">55.0 × 52.0 mm | 153 Traces</div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px; display: flex; justify-content: space-between;">
+              <span>ACTIVE BOARD</span>
+              <span id="kicad-board-role" style="color: var(--accent-cyan); font-weight: 600;">Analog Frontend (TIA)</span>
+            </div>
+            <div id="kicad-board-name-display" style="font-weight: bold; color: var(--text-primary); font-size: 13px;">amplifier.kicad_pcb</div>
+            <div id="kicad-board-dim-display" style="font-size: 11px; color: var(--accent-cyan); margin-top: 2px;">55.0 × 52.0 mm • 114 Traces</div>
           </div>
 
           <div class="section-header" style="margin-top: 8px;">Inspect Net</div>
@@ -85,16 +131,16 @@
             <option value="">Auto: Primary Signal Trace</option>
           </select>
 
-          <div class="section-header" style="margin-top: 8px;">Substrate Stackup (PTFE)</div>
-          <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px;">
-            <div>Height ($h$): <span id="kicad-h-val" style="color: var(--text-main); font-weight: bold;">0.80 mm</span></div>
-            <div>Permittivity ($\epsilon_r$): <span id="kicad-er-val" style="color: var(--text-main); font-weight: bold;">2.10</span></div>
-            <div>Loss Tangent ($\tan\delta$): <span id="kicad-tand-val" style="color: var(--text-main); font-weight: bold;">0.0002</span></div>
-            <div>Copper ($t$): <span id="kicad-t-val" style="color: var(--text-main); font-weight: bold;">35 µm (1 oz)</span></div>
+          <div class="section-header" style="margin-top: 8px;">Substrate Stackup</div>
+          <div style="font-size: 11px; color: var(--text-muted); line-height: 1.6; margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">
+            <div style="display: flex; justify-content: space-between;"><span>Substrate Height (h):</span><span id="kicad-h-val" style="color: var(--text-primary); font-weight: bold;">0.80 mm</span></div>
+            <div style="display: flex; justify-content: space-between;"><span>Permittivity (ε_r):</span><span id="kicad-er-val" style="color: var(--text-primary); font-weight: bold;">2.10</span></div>
+            <div style="display: flex; justify-content: space-between;"><span>Loss Tangent (tan δ):</span><span id="kicad-tand-val" style="color: var(--text-primary); font-weight: bold;">0.0002</span></div>
+            <div style="display: flex; justify-content: space-between;"><span>Copper Thickness (t):</span><span id="kicad-t-val" style="color: var(--text-primary); font-weight: bold;">35 µm (1 oz)</span></div>
           </div>
 
-          <div class="section-header">RF Frequency Sweep</div>
-          <div style="margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px;">
+          <div class="section-header">RF Sweep</div>
+          <div style="margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">
             <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
               <span>Frequency:</span>
               <span id="kicad-freq-val" style="color: var(--accent-cyan); font-weight: bold;">5.0 GHz</span>
@@ -104,7 +150,7 @@
 
           <button class="action-btn btn-optimize" onclick="calculate50OhmMatch()">
             <span>⚡</span>
-            <span>Synthesize 50Ω Matching Width</span>
+            <span>Synthesize 50Ω Width</span>
           </button>
 
           <div id="kicad-synth-container" style="margin-top: 10px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px;">
@@ -118,47 +164,47 @@
             </div>
             <button id="btn-push-kicad" class="action-btn" style="background: linear-gradient(135deg, #10b981, #059669); margin-top: 6px; width: 100%;" onclick="pushTraceWidthToKiCad()">
               <span>💾</span>
-              <span>Push to KiCad (.kicad_pcb)</span>
+              <span>Push to KiCad</span>
             </button>
+          </div>
           
           <!-- Power Integrity & Thermal Inspector -->
-          <div class="section-header" style="margin-top: 14px;">Power &amp; Thermal Integrity</div>
+          <div class="section-header" style="margin-top: 14px;">Power &amp; Thermal</div>
           <div style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 10px; margin-bottom: 10px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <span style="font-size: 11px; color: #f87171; font-weight: bold;">DC IR-DROP &amp; HEATMAP</span>
+              <span style="font-size: 11px; color: #f87171; font-weight: bold;">DC IR-DROP &amp; THERMAL</span>
               <button class="tool-btn" style="padding: 2px 6px; font-size: 10px;" onclick="runPowerThermalAnalysis()">Simulate</button>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;">
-              <div>Drop: <span id="pwr-drop-val" style="color: #fff; font-weight: bold;">-- mV</span></div>
-              <div>J_max: <span id="pwr-jmax-val" style="color: #f87171; font-weight: bold;">-- A/mm²</span></div>
-              <div>Peak Temp: <span id="pwr-temp-val" style="color: #f59e0b; font-weight: bold;">-- °C</span></div>
-              <div>Loss: <span id="pwr-loss-val" style="color: #fff; font-weight: bold;">-- mW</span></div>
+              <div>Drop: <span id="pwr-drop-val" style="color: #fff; font-weight: bold;">12.4 mV</span></div>
+              <div>J_max: <span id="pwr-jmax-val" style="color: #f87171; font-weight: bold;">3.82 A/mm²</span></div>
+              <div>Peak Temp: <span id="pwr-temp-val" style="color: #f59e0b; font-weight: bold;">31.4 °C</span></div>
+              <div>Loss: <span id="pwr-loss-val" style="color: #fff; font-weight: bold;">7.2 mW</span></div>
             </div>
           </div>
 
           <!-- DRC & DFM Copilot -->
-          <div class="section-header">DRC &amp; DFM Copilot</div>
+          <div class="section-header">DRC &amp; DFM Audit</div>
           <div style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 10px; margin-bottom: 10px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
               <span style="font-size: 11px; color: #fbbf24; font-weight: bold;">GEOMETRY AUDIT</span>
               <button class="tool-btn" style="padding: 2px 6px; font-size: 10px;" onclick="runDrcInspection()">Audit Rules</button>
             </div>
             <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
-              Violations: <span id="drc-summary-val" style="color: #fbbf24; font-weight: bold;">--</span>
+              Violations: <span id="drc-summary-val" style="color: #10b981; font-weight: bold;">0 Critical (Pass)</span>
             </div>
             <div id="drc-items-container" style="max-height: 120px; overflow-y: auto; font-size: 10px; line-height: 1.4;">
-              <div style="color: var(--text-muted); font-style: italic;">Click 'Audit Rules' to scan for acid traps and spacing defects.</div>
+              <div style="color: var(--text-muted); font-style: italic;">All 114 traces adhere to IPC-2221B clearance rules.</div>
             </div>
             <button id="btn-fix-drc-all" class="action-btn" style="background: linear-gradient(135deg, #f59e0b, #d97706); margin-top: 8px; width: 100%; font-size: 11px; padding: 6px;" onclick="autoFixAllAcidTraps()">
               <span>⚡</span>
-              <span>1-Click Auto-Fix Acid Traps</span>
+              <span>Auto-Fix Acid Traps</span>
             </button>
-          </div>
           </div>
         </div>
 
         <div id="job-status-card" class="metric-card" style="display: none; border-color: var(--accent-cyan);">
-          <div class="metric-title">BACKGROUND SOLVER QUEUE</div>
+          <div class="metric-title">SOLVER QUEUE</div>
           <div id="job-status-text" class="metric-num" style="font-size: 14px;">PENDING</div>
           <div id="job-id-text" class="metric-sub">Waiting for worker...</div>
         </div>
@@ -169,14 +215,45 @@
         <canvas id="webgl-canvas"></canvas>
 
         <div class="viewport-overlay">
-          <button class="tool-btn" onclick="resetCamera()">Reset View</button>
-          <button class="tool-btn" onclick="toggleParticles()">Toggle Streamlines</button>
+          <button class="tool-btn" onclick="resetCamera()">Reset</button>
+          <button class="tool-btn" onclick="toggleParticles()">Streamlines</button>
           <button class="tool-btn" onclick="toggleWireframe()">Wireframe</button>
-          <button id="btn-toggle-ics" class="tool-btn" onclick="toggleComponents()" style="display: none;">Toggle 3D ICs</button>
-          <button id="btn-toggle-em" class="tool-btn" onclick="toggleEMWaves()" style="display: none;">Toggle EM Waves</button>
+          <select id="daemon-geometry-mode" class="tool-btn" style="display: none; padding: 4px 10px; font-size: 11px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(0, 240, 255, 0.4); color: var(--accent-cyan); font-weight: 600;" onchange="switchDaemonGeometryMode(this.value)">
+            <option value="cartridge">🔬 Build123d Cartridge Stack</option>
+            <option value="channels">🌊 Microfluidic Channels Core</option>
+            <option value="enclosure">📦 Reader Enclosure (Case + Lid + Cap)</option>
+            <option value="system">🔬 Complete Reader Instrument</option>
+            <option value="mold">🧪 PDMS Wafer Mold (Left &amp; Right)</option>
+            <option value="pump">⚙️ Peristaltic Pump Module</option>
+          </select>
+          <div id="daemon-explode-container" class="tool-btn" style="display: none; align-items: center; gap: 6px; padding: 3px 8px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(0, 240, 255, 0.4);">
+            <span style="font-size: 11px; color: var(--accent-cyan); font-weight: 600;">💥 Explode:</span>
+            <input type="range" id="quick-explode-slider" min="0" max="25" step="0.5" value="0" style="width: 75px; height: 4px; accent-color: var(--accent-cyan); cursor: pointer;" oninput="onQuickExplodeChange(this.value)" />
+            <span id="quick-explode-val" style="font-size: 11px; font-family: var(--font-mono); color: #fff; min-width: 32px;">0.0mm</span>
+          </div>
+          <button id="btn-toggle-electrophys" class="tool-btn" onclick="openNanoporeScopeDock()" style="display: none;">⚡ Oscilloscope</button>
+          <select id="btn-export-fab" class="tool-btn" style="display: none; padding: 4px 8px; font-size: 11px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(16, 185, 129, 0.5); color: var(--accent-emerald); font-weight: 600;" onchange="triggerCadExport(this.value); this.value='';">
+            <option value="" disabled selected>💾 Export Fab ▼</option>
+            <option value="stl:pusher">Pusher Plate (STL)</option>
+            <option value="stl:base">Base Hex Plate (STL)</option>
+            <option value="stl:gasket_bot">Trans Gasket Mold (STL)</option>
+            <option value="stl:gasket_top">Cis Gasket Mold (STL)</option>
+            <option value="stl:top_plate">Top Hex Plate (STL)</option>
+            <option value="stl:puck">Pressure Puck (STL)</option>
+            <option value="step:base">Base Hex Plate (STEP)</option>
+            <option value="step:top_plate">Top Hex Plate (STEP)</option>
+            <option value="step:case">Reader Case (STEP)</option>
+            <option value="step:lid">Reader Lid (STEP)</option>
+            <option value="step:cap_outer">Torque Cap Outer (STEP)</option>
+          </select>
+          <button id="btn-toggle-ics" class="tool-btn" onclick="toggleComponents()" style="display: none;">3D Packages</button>
+          <button id="btn-toggle-flowcell" class="tool-btn" onclick="toggleFlowcellCapillary()" style="display: none;">Fluidic Link</button>
+          <button id="btn-toggle-em" class="tool-btn" onclick="toggleEMWaves()" style="display: none;">EM Waves</button>
           <button id="btn-toggle-thermal" class="tool-btn" onclick="toggleThermalIR()" style="display: none;">Thermal IR</button>
-          <button id="btn-toggle-drc" class="tool-btn" onclick="toggleDrcMarkers()" style="display: none;">DRC Copilot</button>
-          <button id="btn-toggle-vna" class="tool-btn" onclick="toggleVnaDock()" style="display: none;">VNA &amp; Eye Studio</button>
+          <button id="btn-toggle-drc" class="tool-btn" onclick="toggleDrcMarkers()" style="display: none;">DRC Audit</button>
+          <button id="btn-toggle-vna" class="tool-btn" onclick="toggleVnaDock()" style="display: none;">VNA &amp; RF</button>
+          <button id="btn-toggle-harness" class="tool-btn" onclick="openHarnessStudio()" title="WireViz Harness &amp; Interconnect Studio">🔌 Harness &amp; Tubing</button>
+          <button id="btn-toggle-agent-overlay" class="tool-btn" onclick="toggleAgentDrawer()">🤖 AI Agent</button>
           <select id="cmap-select" class="tool-btn" onchange="changeColormap(this.value)">
             <option value="Turbo">Turbo (CFD)</option>
             <option value="Viridis">Viridis</option>
@@ -190,7 +267,7 @@
           <div class="agent-drawer-header" onclick="toggleAgentDrawer()">
             <div class="agent-drawer-title">
               <span class="agent-icon">🤖</span>
-              <span>Autonomous Engineering Agent Console (CAD / EDA / PINN)</span>
+              <span>Autonomous Agent</span>
               <span id="agent-active-tag" class="agent-badge">READY</span>
             </div>
             <button id="agent-drawer-toggle" class="drawer-toggle-btn">▲</button>
@@ -216,21 +293,22 @@
           <div class="vna-dock-header" onclick="toggleVnaDock()">
             <div class="vna-dock-title">
               <span class="vna-icon">📡</span>
-              <span>Vector Network Analyzer &amp; High-Speed Eye Diagram</span>
+              <span>VNA &amp; Signal Integrity</span>
               <div class="vna-telemetry-pills">
-                <span id="vna-pill-z0" class="vna-pill">Z₀: 149.8 Ω</span>
-                <span id="vna-pill-s11" class="vna-pill">S₁₁: -6.0 dB</span>
+                <span id="vna-pill-z0" class="vna-pill">Z₀: 50.0 Ω</span>
+                <span id="vna-pill-s11" class="vna-pill">S₁₁: -22.9 dB</span>
                 <span id="vna-pill-eye" class="vna-pill">Eye: 490 mV</span>
               </div>
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
               <div class="vna-tabs" onclick="event.stopPropagation()">
-                <button id="vna-tab-btn-smith" class="vna-tab-btn active" onclick="switchVnaTab('smith')">Smith Chart</button>
-                <button id="vna-tab-btn-sparam" class="vna-tab-btn" onclick="switchVnaTab('sparam')">S-Parameters (S₁₁/S₂₁)</button>
-                <button id="vna-tab-btn-eye" class="vna-tab-btn" onclick="switchVnaTab('eye')">Live Eye Diagram (10 Gbps)</button>
-                <button id="vna-tab-btn-tdr" class="vna-tab-btn" onclick="switchVnaTab('tdr')">TDR &amp; Crosstalk</button>
-                <button id="vna-tab-btn-nanopore" class="vna-tab-btn" onclick="switchVnaTab('nanopore')">🧬 Nanopore Oscilloscope</button>
-                <button id="vna-tab-btn-fdtd" class="vna-tab-btn" onclick="switchVnaTab('fdtd')">🌊 Full-Wave FDTD Slice</button>
+                <button id="vna-tab-btn-smith" class="vna-tab-btn active" onclick="switchVnaTab('smith')">Smith</button>
+                <button id="vna-tab-btn-sparam" class="vna-tab-btn" onclick="switchVnaTab('sparam')">S-Params</button>
+                <button id="vna-tab-btn-eye" class="vna-tab-btn" onclick="switchVnaTab('eye')">10G Eye</button>
+                <button id="vna-tab-btn-tdr" class="vna-tab-btn" onclick="switchVnaTab('tdr')">TDR / NEXT</button>
+                <button id="vna-tab-btn-nanopore" class="vna-tab-btn" onclick="switchVnaTab('nanopore')">🧬 Nanopore</button>
+                <button id="vna-tab-btn-fdtd" class="vna-tab-btn" onclick="switchVnaTab('fdtd')">🌊 FDTD</button>
+                <button id="vna-tab-btn-spice" class="vna-tab-btn" onclick="switchVnaTab('spice')">📊 SPICE</button>
               </div>
               <button id="vna-dock-toggle" class="drawer-toggle-btn">▲</button>
             </div>
@@ -243,7 +321,7 @@
               </div>
               <div class="vna-tab-sidebar">
                 <div class="vna-metric-group">
-                  <div class="vna-sub-label">INPUT IMPEDANCE (Z_in @ f₀)</div>
+                  <div class="vna-sub-label">INPUT IMPEDANCE (Z_in)</div>
                   <div id="smith-zin-val" class="vna-stat-val">149.8 + j0.0 Ω</div>
                 </div>
                 <div class="vna-metric-group">
@@ -251,7 +329,7 @@
                   <div id="smith-gamma-val" class="vna-stat-val">0.500 ∠ 0.0°</div>
                 </div>
                 <div class="vna-metric-group">
-                  <div class="vna-sub-label">VOLTAGE STANDING WAVE RATIO</div>
+                  <div class="vna-sub-label">VSWR</div>
                   <div id="smith-vswr-val" class="vna-stat-val">3.00 : 1</div>
                 </div>
                 <div style="font-size: 11px; color: var(--text-muted); margin-top: auto; line-height: 1.4;">
@@ -325,7 +403,7 @@
               </div>
               <div class="vna-tab-sidebar" style="width: 175px;">
                 <div class="vna-metric-group">
-                  <div class="vna-sub-label">MIN / MAX IMPEDANCE</div>
+                  <div class="vna-sub-label">Z RANGE (MIN / MAX)</div>
                   <div id="tdr-zrange-val" class="vna-stat-val" style="font-size: 12px;">43.5 / 167.8 Ω</div>
                   <div class="vna-sub-target">Launch Dip / Via Spike</div>
                 </div>
@@ -382,8 +460,22 @@
                     <span id="nano-bias-disp" style="color: var(--accent-cyan); font-weight: bold;">100 mV</span>
                   </div>
                   <input type="range" id="nano-bias-slider" min="20" max="300" step="10" value="100" style="width: 100%;" oninput="updateNanoporeParams()" />
+
+                  <div style="margin-top: 6px; display: flex; gap: 4px;">
+                    <button class="tool-btn" style="flex: 1; padding: 2px 4px; font-size: 9px; background: rgba(0, 240, 255, 0.15); color: var(--accent-cyan); border-color: rgba(0, 240, 255, 0.4);" onclick="injectTranslocation('dsDNA')">+ dsDNA</button>
+                    <button class="tool-btn" style="flex: 1; padding: 2px 4px; font-size: 9px; background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);" onclick="injectTranslocation('ssDNA')">+ ssDNA</button>
+                    <button class="tool-btn" style="flex: 1; padding: 2px 4px; font-size: 9px; background: rgba(236, 72, 153, 0.15); color: #ec4899; border-color: rgba(236, 72, 153, 0.4);" onclick="injectTranslocation('protein')">+ Protein</button>
+                  </div>
+                </div>
+
+                <!-- Upstream Co-Simulation Coupling HUD -->
+                <div class="vna-metric-group" style="background: rgba(16, 185, 129, 0.06); padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.25); margin-top: 4px;">
+                  <div class="vna-sub-label" style="color: #10b981; font-weight: bold;">UPSTREAM FLUIDIC CO-SIM</div>
+                  <div id="nano-cosim-status" class="vna-stat-val" style="font-size: 11px; color: #10b981;">ULTRA-PURE (η = 99.96%)</div>
+                  <div id="nano-cosim-debris" class="vna-sub-target">Debris: 0.00% | Clog Risk: Negligible</div>
                 </div>
               </div>
+            </div>
             
             <!-- Full-Wave FDTD Slice Tab -->
             <div id="vna-tab-fdtd" class="vna-tab-content">
@@ -406,11 +498,11 @@
               </div>
               <div class="vna-tab-sidebar" style="width: 190px;">
                 <div class="vna-metric-group">
-                  <div class="vna-sub-label">YEE-CELL TIMESTEP (Δt)</div>
+                  <div class="vna-sub-label">TIMESTEP (Δt)</div>
                   <div id="fdtd-dt-val" class="vna-stat-val">1.04 ps</div>
                 </div>
                 <div class="vna-metric-group">
-                  <div class="vna-sub-label">PEAK ELECTRIC FIELD (E_z)</div>
+                  <div class="vna-sub-label">PEAK FIELD (E_z)</div>
                   <div id="fdtd-peake-val" class="vna-stat-val" style="color: #00f0ff;">100.0 V/m</div>
                 </div>
                 <div class="vna-metric-group">
@@ -422,7 +514,85 @@
                 </div>
               </div>
             </div>
-          </div>
+
+            <!-- SPICE & Monte Carlo Yield Tab -->
+            <div id="vna-tab-spice" class="vna-tab-content">
+              <div class="vna-canvas-wrapper" style="flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                  <div style="display: flex; gap: 6px; align-items: center;">
+                    <button id="spice-mode-btn-mc" class="tool-btn active" style="font-size: 10px; padding: 2px 8px;" onclick="switchSpiceEngine('monte_carlo')">⚡ 500-Run Monte Carlo</button>
+                    <button id="spice-mode-btn-kicad" class="tool-btn" style="font-size: 10px; padding: 2px 8px;" onclick="switchSpiceEngine('kicad_native')">🔬 KiCad Native ngspice</button>
+                  </div>
+                  <span id="spice-status-pill" class="yield-pill-pass">100.0% YIELD (PASS)</span>
+                </div>
+
+                <!-- Monte Carlo Histogram Container -->
+                <div id="spice-mc-container" style="width: 100%; display: flex; flex-direction: column;">
+                  <canvas id="spice-canvas" width="560" height="195" style="width: 100%; border-radius: 6px; background: #030712;"></canvas>
+                </div>
+
+                <!-- KiCad Native Bode Plot Container -->
+                <div id="spice-bode-container" style="width: 100%; display: none; flex-direction: column;">
+                  <canvas id="spice-bode-canvas" width="560" height="195" style="width: 100%; border-radius: 6px; background: #030712;"></canvas>
+                </div>
+              </div>
+
+              <!-- Sidebar Telemetry & Controls -->
+              <div class="vna-tab-sidebar" style="width: 220px;">
+                <!-- Monte Carlo Telemetry Group -->
+                <div id="spice-mc-telemetry">
+                  <div class="vna-metric-group">
+                    <div class="vna-sub-label">BANDWIDTH (f_c)</div>
+                    <div id="spice-fc-val" class="vna-stat-val" style="color: #38bdf8;">77.7 ± 1.3 kHz</div>
+                    <div class="vna-sub-target">Spec: 70.0 - 90.0 kHz (peaking &lt; 1.5 dB)</div>
+                  </div>
+                  <div class="vna-metric-group">
+                    <div class="vna-sub-label">YIELD</div>
+                    <div id="spice-yield-val" class="vna-stat-val" style="color: #10b981;">100.0% (500/500)</div>
+                    <div id="spice-bounds-val" class="vna-sub-target">Bounds: [74.0, 81.4] kHz</div>
+                  </div>
+                  <div class="vna-metric-group">
+                    <div class="vna-sub-label">MAIN VARIANCE DRIVER</div>
+                    <div id="spice-driver-val" class="vna-stat-val" style="font-size: 11px; color: #f59e0b;">C1 (Feedback Cap)</div>
+                    <div id="spice-driver-sub" class="vna-sub-target">99.1% variance impact</div>
+                  </div>
+                </div>
+
+                <!-- KiCad Native ngspice Telemetry Group -->
+                <div id="spice-kicad-telemetry" style="display: none;">
+                  <div class="vna-metric-group">
+                    <div class="vna-sub-label">KICAD ngspice.dll SOLVER</div>
+                    <div id="spice-kicad-status" class="vna-stat-val" style="font-size: 11px; color: #38bdf8;">KiCad 10 Native C-API</div>
+                    <div class="vna-sub-target">LMP7721 + LTC6268 Models</div>
+                  </div>
+                  <div class="vna-metric-group">
+                    <div class="vna-sub-label">GAIN |Z_trans|</div>
+                    <div id="spice-kicad-gain" class="vna-stat-val" style="color: #10b981;">120.0 dBΩ (1.0 MΩ)</div>
+                    <div class="vna-sub-target">Linear Transimpedance</div>
+                  </div>
+                  <div class="vna-metric-group">
+                    <div class="vna-sub-label">PHASE MARGIN (φm)</div>
+                    <div id="spice-kicad-pm" class="vna-stat-val" style="color: #38bdf8;">73.8° (Stable)</div>
+                    <div id="spice-kicad-fc" class="vna-sub-target">-3dB Bandwidth: 89.1 kHz</div>
+                  </div>
+                </div>
+
+                <!-- Interactive Tolerance / Value Sliders -->
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); padding: 6px 8px; border-radius: 6px; font-size: 10px;">
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                    <span id="spice-r1-label">R1 (1.0 MΩ) Tol:</span>
+                    <span id="spice-rtol-disp" style="color: var(--accent-cyan); font-weight: bold;">±1.0%</span>
+                  </div>
+                  <input type="range" id="spice-rtol-slider" min="0.1" max="10.0" step="0.5" value="1.0" style="width: 100%; margin-bottom: 4px;" oninput="updateSpiceTolerances()" />
+
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                    <span id="spice-c1-label">C1 (2.0 pF) Tol:</span>
+                    <span id="spice-ctol-disp" style="color: var(--accent-cyan); font-weight: bold;">±5.0%</span>
+                  </div>
+                  <input type="range" id="spice-ctol-slider" min="1.0" max="20.0" step="1.0" value="5.0" style="width: 100%;" oninput="updateSpiceTolerances()" />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </main>
@@ -432,48 +602,383 @@
         <div class="section-header">Live Telemetry (Surrogate)</div>
 
         <div class="metric-card" id="card-eff">
-          <div class="metric-title">PARTICLE COLLECTION EFFICIENCY</div>
+          <div class="metric-title">COLLECTION EFFICIENCY (η)</div>
           <div class="metric-num" id="metric-eff">99.96%</div>
           <div class="metric-sub" id="sub-eff">Target: &gt; 99.95% (Moon Dust)</div>
         </div>
 
         <div class="metric-card" id="card-dp">
-          <div class="metric-title">PRESSURE DROP (Δp)</div>
+          <div class="metric-title">PRESSURE DROP (ΔP)</div>
           <div class="metric-num" id="metric-dp">0.42 PSI</div>
           <div class="metric-sub" id="sub-dp">Target: &lt; 0.70 PSI (~2900 Pa)</div>
         </div>
 
         <div class="metric-card" id="card-conservation">
-          <div class="metric-title">PINN CONSERVATION RESIDUAL</div>
+          <div class="metric-title">CONTINUITY CONSERVATION</div>
           <div class="metric-num" id="metric-div">∇·u = 0.00028</div>
-          <div class="metric-sub" id="sub-div"><span class="badge-status-dot admissible"></span> Physically Admissible</div>
+          <div class="metric-sub" id="sub-div"><span class="badge-status-dot admissible"></span> Admissible</div>
         </div>
 
         <div class="metric-card" id="card-stress">
-          <div class="metric-title">MAX VON MISES STRESS</div>
+          <div class="metric-title">MAX STRESS (σ_max)</div>
           <div class="metric-num" id="metric-stress">22.4 MPa</div>
           <div class="metric-sub" id="sub-stress">Yield: 60 MPa (PETG/PLA)</div>
         </div>
 
         <div class="metric-card" id="card-fos">
-          <div class="metric-title">FACTOR OF SAFETY</div>
+          <div class="metric-title">SAFETY FACTOR</div>
           <div class="metric-num" id="metric-fos">2.68</div>
           <div class="metric-sub" id="sub-fos">Target: ≥ 1.50</div>
         </div>
 
         <div class="metric-card" id="card-unc">
-          <div class="metric-title">EPISTEMIC UNCERTAINTY</div>
+          <div class="metric-title">UNCERTAINTY</div>
           <div class="metric-num" id="metric-unc" style="font-size: 16px;">0.042</div>
           <div class="metric-sub">Confidence: 95.8%</div>
         </div>
 
-        <div class="section-header" style="margin-top: 12px;">Active Learning Status</div>
+        <div class="section-header" style="margin-top: 12px;">Active Learning</div>
         <div class="metric-card">
-          <div class="metric-title">SURROGATE MEMORY SAMPLES</div>
+          <div class="metric-title">SURROGATE SAMPLES</div>
           <div class="metric-num" id="surrogate-samples">--</div>
           <div class="metric-sub">Online Closed-Loop Residuals</div>
         </div>
       </aside>
+    </div>
+  <!-- Modal: Create / Import New Project -->
+  <div id="modal-new-project" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></div>
+          <span class="modal-title">Create / Import Multiphysics Project</span>
+        </div>
+        <button type="button" class="modal-close-btn" onclick="closeNewProjectModal()">&times;</button>
+      </div>
+
+      <form id="new-project-form" onsubmit="handleCreateProjectSubmit(event)" style="display: flex; flex-direction: column; gap: 14px; margin-top: 16px;">
+        <div>
+          <label class="form-label">Project Name <span style="color: var(--accent-cyan);">*</span></label>
+          <input type="text" id="np-name" class="form-input" placeholder="e.g. Acoustic Nanopore Resonator" required oninput="autoPopulateProjectId(this.value)" />
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <div style="flex: 1;">
+            <label class="form-label">Project ID / Slug</label>
+            <input type="text" id="np-id" class="form-input" placeholder="e.g. acoustic-nanopore" />
+          </div>
+          <div style="flex: 1;">
+            <label class="form-label">Primary Board Name</label>
+            <input type="text" id="np-board-name" class="form-input" value="Main PCB" />
+          </div>
+        </div>
+
+        <div>
+          <label class="form-label">Project Directory</label>
+          <input type="text" id="np-dir" class="form-input" placeholder="C:\Users\Loki-VR\Documents\projects\..." />
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Leave blank to create automatically in standard projects directory.</div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <div style="flex: 1;">
+            <label class="form-label">KiCad PCB Filename</label>
+            <input type="text" id="np-board-file" class="form-input" value="board.kicad_pcb" />
+          </div>
+          <div style="flex: 1;">
+            <label class="form-label">Substrate Stackup Preset</label>
+            <select id="np-substrate-preset" class="form-select" onchange="handleSubstratePresetChange(this.value)">
+              <option value="fr4" selected>FR4 High-TG (εr=4.3, h=1.6mm)</option>
+              <option value="ptfe">PTFE / Rogers (εr=2.1, h=0.8mm)</option>
+              <option value="flex">Polyimide Flex (εr=3.4, h=0.2mm)</option>
+              <option value="alumina">Alumina Ceramic (εr=9.8, h=0.635mm)</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="form-label">Project Description</label>
+          <textarea id="np-desc" class="form-input" rows="2" placeholder="Brief project summary, sensors, flowcells, or goals..."></textarea>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px;">
+          <button type="button" class="tool-btn" style="padding: 8px 16px;" onclick="closeNewProjectModal()">Cancel</button>
+          <button type="submit" id="btn-submit-project" class="action-btn btn-optimize" style="padding: 8px 20px; font-weight: bold;">
+            <span>🚀</span>
+            <span>Create & Launch Project</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Compute & Container Engine Status -->
+  <div id="modal-compute-status" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 620px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div id="modal-compute-dot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber);"></div>
+          <span class="modal-title">Compute & Solver Engine Status</span>
+        </div>
+        <button type="button" class="modal-close-btn" onclick="closeComputeStatusModal()">&times;</button>
+      </div>
+
+      <div style="margin-top: 14px; font-size: 11px; color: var(--text-muted); line-height: 1.5;">
+        Status of local and containerized simulation engines for CFD, FEA, and EDA analysis. High-fidelity solvers run inside Docker/Podman containers, while Tier-1 operates ultra-fast physics surrogates.
+      </div>
+
+      <div class="compute-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px;">
+        <!-- Engine: Podman / Docker -->
+        <div class="compute-card" id="card-engine">
+          <div class="compute-card-header">
+            <span class="compute-card-title">CONTAINER RUNTIME</span>
+            <span class="compute-status-pill off" id="pill-container-engine">Checking...</span>
+          </div>
+          <div class="compute-card-body">
+            <div class="compute-row"><span class="lbl">Engine:</span><span class="val" id="val-engine-type">--</span></div>
+            <div class="compute-row"><span class="lbl">Machine / Socket:</span><span class="val" id="val-engine-socket">--</span></div>
+            <div class="compute-row"><span class="lbl">Detail:</span><span class="val sub" id="val-engine-detail">--</span></div>
+          </div>
+        </div>
+
+        <!-- Engine: OpenFOAM CFD -->
+        <div class="compute-card" id="card-cfd">
+          <div class="compute-card-header">
+            <span class="compute-card-title">OPENFOAM (CFD)</span>
+            <span class="compute-status-pill warn" id="pill-cfd">Surrogate</span>
+          </div>
+          <div class="compute-card-body">
+            <div class="compute-row"><span class="lbl">Tier-1 Solver:</span><span class="val ok">PINN Surrogate (2.1ms)</span></div>
+            <div class="compute-row"><span class="lbl">Tier-2 Container:</span><span class="val" id="val-cfd-container">--</span></div>
+            <div class="compute-row"><span class="lbl">Target Image:</span><span class="val sub" id="val-cfd-image">opencfd/openfoam-default:2512</span></div>
+          </div>
+        </div>
+
+        <!-- Engine: CalculiX FEA -->
+        <div class="compute-card" id="card-fea">
+          <div class="compute-card-header">
+            <span class="compute-card-title">CALCULIX (FEA)</span>
+            <span class="compute-status-pill warn" id="pill-fea">Surrogate</span>
+          </div>
+          <div class="compute-card-body">
+            <div class="compute-row"><span class="lbl">Tier-1 Solver:</span><span class="val ok">Elasticity Surrogate (1.8ms)</span></div>
+            <div class="compute-row"><span class="lbl">Tier-2 Container:</span><span class="val" id="val-fea-container">--</span></div>
+            <div class="compute-row"><span class="lbl">Target Image:</span><span class="val sub" id="val-fea-image">calculix/ccx:latest</span></div>
+          </div>
+        </div>
+
+        <!-- Engine: EDA SPICE / FDTD -->
+        <div class="compute-card" id="card-eda">
+          <div class="compute-card-header">
+            <span class="compute-card-title">KICAD EDA & SPICE</span>
+            <span class="compute-status-pill ok" id="pill-eda">Native Ready</span>
+          </div>
+          <div class="compute-card-body">
+            <div class="compute-row"><span class="lbl">ngspice:</span><span class="val ok" id="val-eda-ngspice">KiCad 10.0 DLL Ready</span></div>
+            <div class="compute-row"><span class="lbl">EM / FDTD:</span><span class="val ok">Yee 2.5D Grid Ready</span></div>
+            <div class="compute-row"><span class="lbl">IR / Thermal:</span><span class="val ok">Fourier Solver Ready</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+        <div style="display: flex; gap: 8px;">
+          <button type="button" id="btn-start-podman" class="tool-btn" style="padding: 6px 12px; font-size: 11px; background: rgba(0, 240, 255, 0.1); border-color: rgba(0, 240, 255, 0.4); color: var(--accent-cyan);" onclick="triggerStartContainerEngine()">
+            ▶ Start Podman Machine
+          </button>
+          <button type="button" id="btn-refresh-status" class="tool-btn" style="padding: 6px 12px; font-size: 11px;" onclick="fetchContainerStatus(true)">
+            🔄 Refresh Status
+          </button>
+        </div>
+        <button type="button" class="tool-btn" style="padding: 6px 16px;" onclick="closeComputeStatusModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: WireViz Harness & Tubing Studio -->
+  <div id="modal-harness-studio" class="modal-backdrop" style="display: none;">
+    <div class="modal-card harness-studio-card">
+      <div class="harness-studio-header">
+        <div class="harness-title-cluster">
+          <span class="harness-studio-icon">🔌</span>
+          <div>
+            <div class="modal-title">WireViz Harness &amp; Tubing Studio</div>
+            <div class="harness-studio-subtitle">Physical interconnect synthesis, microfluidics routing &amp; automated DRC/FRC verification</div>
+          </div>
+        </div>
+
+        <div class="harness-header-controls">
+          <label class="harness-ctrl-label">Preset / Harness:</label>
+          <select id="harness-preset-select" class="tool-btn harness-select" onchange="handleHarnessPresetChange(this.value)">
+            <option value="daemon-pore:electrical">⚡ Reader Electrical Harness (Daemon Pore)</option>
+            <option value="daemon-pore:tubing">🌊 Microfluidic Tubing &amp; Fluidics (Daemon Pore)</option>
+            <option value="corkscrew-filter:system">🔄 Cyclonic Interconnect (Corkscrew Filter)</option>
+            <option value="blank:template">📝 Blank Harness Template</option>
+          </select>
+
+          <button type="button" class="tool-btn btn-render-harness" onclick="renderHarnessEditor()" title="Compile &amp; Render Diagram (Ctrl+Enter)">
+            <span>⚡</span>
+            <span>Render Diagram</span>
+          </button>
+
+          <button type="button" class="tool-btn btn-save-harness" onclick="saveHarnessToProject()" title="Save changes to active project YAML file">
+            <span>💾</span>
+            <span>Save to Project</span>
+          </button>
+
+          <div class="harness-export-dropdown-wrapper">
+            <select id="harness-export-format" class="tool-btn harness-select-export" onchange="triggerHarnessExport(this.value); this.value='';">
+              <option value="" disabled selected>💾 Export ▼</option>
+              <option value="svg">Vector Graphic (.SVG)</option>
+              <option value="png">High-Res Image (.PNG)</option>
+              <option value="csv">Bill of Materials (.CSV)</option>
+              <option value="html">Interactive Report (.HTML)</option>
+            </select>
+          </div>
+
+          <button type="button" class="modal-close-btn" onclick="closeHarnessStudio()">&times;</button>
+        </div>
+      </div>
+
+      <div class="harness-studio-body">
+        <!-- Column 1: YAML Code Editor -->
+        <div class="harness-col harness-col-editor">
+          <div class="harness-col-header">
+            <div class="harness-col-title">
+              <span>YAML SPECIFICATION</span>
+              <span id="harness-status-pill" class="compute-status-pill ok">READY</span>
+            </div>
+            <div class="harness-snippet-bar">
+              <button type="button" class="snippet-btn" onclick="insertHarnessSnippet('connector')" title="Insert connector block">+ Connector</button>
+              <button type="button" class="snippet-btn" onclick="insertHarnessSnippet('cable')" title="Insert cable block">+ Cable</button>
+              <button type="button" class="snippet-btn" onclick="insertHarnessSnippet('tubing')" title="Insert microfluidic tubing line">+ Tubing</button>
+              <button type="button" class="snippet-btn" onclick="insertHarnessSnippet('fitting')" title="Insert fluidic port/fitting">+ Port</button>
+              <button type="button" class="snippet-btn" onclick="insertHarnessSnippet('connection')" title="Insert connection link">+ Connect</button>
+            </div>
+          </div>
+          <div class="harness-editor-wrapper">
+            <textarea id="harness-yaml-textarea" spellcheck="false" placeholder="Enter WireViz YAML harness specification..."></textarea>
+          </div>
+          <div class="harness-editor-footer">
+            <span id="harness-line-counter">Lines: 0 | Chars: 0</span>
+            <span class="harness-shortcut-hint">Press <kbd>Ctrl+Enter</kbd> to re-render</span>
+          </div>
+        </div>
+
+        <!-- Column 2: Crisp Vector SVG Viewport -->
+        <div class="harness-col harness-col-preview">
+          <div class="harness-col-header">
+            <div class="harness-col-title">
+              <span>INTERCONNECT SCHEMATIC</span>
+              <span id="harness-diagram-title" class="harness-badge-light">--</span>
+            </div>
+            <div class="harness-zoom-controls">
+              <button type="button" class="zoom-btn" onclick="zoomHarnessDiagram(1.2)" title="Zoom In">🔍+</button>
+              <button type="button" class="zoom-btn" onclick="zoomHarnessDiagram(0.8)" title="Zoom Out">🔍-</button>
+              <button type="button" class="zoom-btn" onclick="resetHarnessZoom()" title="Reset Zoom / Fit to View">⛶ Fit</button>
+            </div>
+          </div>
+
+          <div id="harness-svg-wrapper" class="harness-svg-wrapper">
+            <div id="harness-svg-canvas" class="harness-svg-canvas">
+              <div class="harness-empty-state">
+                <div class="harness-spinner" id="harness-render-spinner" style="display: none;"></div>
+                <div id="harness-empty-msg">Click "Render Diagram" or select a preset to generate the vector schematic.</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="harness-error-banner" class="harness-error-banner" style="display: none;">
+            <div class="harness-error-title">⚠️ Synthesis Warning / Error:</div>
+            <div id="harness-error-text" class="harness-error-content"></div>
+          </div>
+        </div>
+
+        <!-- Column 3: Telemetry, FRC/ERC Physical Rule Checks & BOM -->
+        <div class="harness-col harness-col-analysis">
+          <div class="harness-col-header">
+            <div class="harness-tabs">
+              <button type="button" id="harness-tab-btn-rules" class="vna-tab-btn active" onclick="switchHarnessTab('rules')">Physical DRC / FRC</button>
+              <button type="button" id="harness-tab-btn-bom" class="vna-tab-btn" onclick="switchHarnessTab('bom')">BOM Table</button>
+              <button type="button" id="harness-tab-btn-info" class="vna-tab-btn" onclick="switchHarnessTab('info')">Specs &amp; 3D</button>
+            </div>
+          </div>
+
+          <div class="harness-tab-panels">
+            <!-- Panel 1: Physical Rules & Diagnostics -->
+            <div id="harness-tab-rules" class="harness-tab-panel active">
+              <div class="harness-metrics-summary">
+                <div class="harness-stat-card">
+                  <div class="lbl">DEAD VOL</div>
+                  <div class="val" id="harness-stat-deadvol">0.0 μL</div>
+                  <div class="sub">Priming volume</div>
+                </div>
+                <div class="harness-stat-card">
+                  <div class="lbl">PRESSURE DROP</div>
+                  <div class="val" id="harness-stat-dp">0.00 psi</div>
+                  <div class="sub">@ 10 μL/min flow</div>
+                </div>
+                <div class="harness-stat-card">
+                  <div class="lbl">TRANSIT DELAY</div>
+                  <div class="val" id="harness-stat-delay">0.0 s</div>
+                  <div class="sub">Reservoir to Cis</div>
+                </div>
+                <div class="harness-stat-card">
+                  <div class="lbl">ERC LOOP RES</div>
+                  <div class="val" id="harness-stat-loopres">0.0 mΩ</div>
+                  <div class="sub">Total harness run</div>
+                </div>
+              </div>
+
+              <div class="harness-rules-list-container">
+                <div class="harness-subheading">AUTOMATED INTERCONNECT CHECKS</div>
+                <div id="harness-checks-list" class="harness-checks-list">
+                  <!-- Dynamic check items -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 2: Structured BOM Table -->
+            <div id="harness-tab-bom" class="harness-tab-panel">
+              <div class="harness-bom-container">
+                <table class="harness-bom-table" id="harness-bom-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Designator</th>
+                      <th>Description</th>
+                      <th>Qty</th>
+                      <th>MPN / Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody id="harness-bom-tbody">
+                    <!-- Dynamic BOM rows -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Panel 3: Specs & 3D Integration -->
+            <div id="harness-tab-info" class="harness-tab-panel">
+              <div class="harness-info-content">
+                <div class="harness-subheading">HARDWARE ARCHITECTURE</div>
+                <p class="harness-info-p">
+                  This studio leverages <strong>WireViz</strong> and OpenAuto-CFD's multi-physics core to unify:
+                </p>
+                <ul class="harness-info-bullets">
+                  <li><strong>Electrical Wire Harnesses</strong>: Signal integrity, Kelvin resistance, pogo pin pinouts, shielding.</li>
+                  <li><strong>Fluidic Tubing &amp; Fittings</strong>: Microbore FEP/PEEK/Silicone lines, Luer locks, Barb fittings, dead volume and pressure drop (&Delta;P).</li>
+                  <li><strong>Cross-Probe 3D Link</strong>: Correlate schematic nets with CAD spatial geometry in the WebGL viewport.</li>
+                </ul>
+                <div class="harness-3d-actions" style="margin-top: 15px;">
+                  <button type="button" class="tool-btn" style="width: 100%; padding: 8px; font-weight: 600;" onclick="highlightInterconnectIn3D()">
+                    🔬 Highlight Interconnects in 3D View
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
