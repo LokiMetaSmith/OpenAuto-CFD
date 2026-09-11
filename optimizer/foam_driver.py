@@ -528,6 +528,17 @@ boundaryField
                 f.write(header + blocks_str + footer)
 
 
+    def _clamp_scalar_fields(self, zero_dir=None):
+        """
+        Proactive pre-flight field clamping engine:
+        Enforces k >= 1e-6, epsilon >= 1e-6, omega >= 1e-6, nut >= 1e-7 across
+        internal fields and boundary patches to prevent zero-cell singularities during extreme CAD mutations.
+        """
+        if zero_dir is None:
+            zero_dir = os.path.join(self.case_dir, "0")
+        if os.path.exists(zero_dir):
+            self._sanitize_fields(zero_dir)
+
     def _sanitize_fields(self, zero_dir):
         """
         Global invariant enforcer: ensure no turbulence fields fall to 0, NaN, or extremely small values.

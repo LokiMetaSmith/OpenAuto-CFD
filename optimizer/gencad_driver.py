@@ -770,11 +770,12 @@ class GenCADDriver:
 
     def generate_transformer_ast_sequence(
         self,
-        physics_target: Dict[str, float]
+        physics_target: Dict[str, float],
+        format_type: str = "build123d"
     ) -> Tuple[List[int], Dict[str, float], str]:
         """
         Uses Transformer sequence model to generate discrete CAD AST token IDs,
-        parameters, and executable build123d Python script.
+        parameters, and executable build123d Python script or OpenSCAD code.
         """
         physics_vec = self.encode_physics(physics_target)
         if self.transformer_model and HAS_TORCH:
@@ -784,7 +785,7 @@ class GenCADDriver:
             token_ids = self.tokenizer.encode_parameters(synth_p)
 
         params = self.tokenizer.decode_tokens_to_parameters(token_ids)
-        script = self.tokenizer.decode_tokens_to_script(token_ids, format_type="build123d")
+        script = self.tokenizer.decode_tokens_to_script(token_ids, format_type=format_type)
         return token_ids, params, script
 
     def generate_cad_script(
@@ -888,7 +889,7 @@ union() {{
         retrieved_cad = self.retrieve_cad_program(physics_target, top_k=1)[0]
 
         if use_transformer_sequence:
-            token_ids, synth_params, script_code = self.generate_transformer_ast_sequence(physics_target)
+            token_ids, synth_params, script_code = self.generate_transformer_ast_sequence(physics_target, format_type=format_type)
         else:
             synth_params = self.synthesize_cad_parameters(physics_target)
             token_ids = self.tokenizer.encode_parameters(synth_params)

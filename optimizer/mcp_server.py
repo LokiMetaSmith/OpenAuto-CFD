@@ -2,7 +2,8 @@
 MCP (Model Context Protocol) Server for OpenAuto-CFD.
 
 Exposes tools, resources, and prompts for LLMs to control, query, and drive the simulation harness,
-run parameter evaluations, inspect optimization history, execute Schema surrogate steps, and export fine-tuning datasets.
+run parameter evaluations, inspect optimization history, execute Schema surrogate steps, export fine-tuning datasets,
+and execute GenCAD physics/vision cross-modal sequence generation.
 """
 
 import os
@@ -28,6 +29,7 @@ from optimizer.simulation_runner import run_simulation
 from optimizer.data_store import DataStore
 from optimizer.llm_agent import LLMAgent
 from optimizer.parameter_validator import validate_parameters
+from optimizer.gencad_driver import GenCADDriver
 from optimizer.generate_training_data import (
     load_yaml_config,
     load_optimization_logs,
@@ -39,7 +41,7 @@ from optimizer.generate_training_data import (
 # Initialize FastMCP / MCPServer Instance
 mcp = FastMCP(
     "OpenAuto-CFD",
-    instructions="MCP Server providing tools, resources, and prompts for autonomous engineering, 3D parametric SCAD generation, CFD/EM simulation, and Schema surrogate optimization loops."
+    instructions="MCP Server providing tools, resources, and prompts for autonomous engineering, 3D parametric SCAD/build123d generation, GenCAD physics/vision cross-modal sequence generation, CFD/EM simulation, and Schema surrogate optimization loops."
 )
 
 # ==============================================================================
@@ -236,6 +238,72 @@ def run_simulation_tool(
         "solid_stl_path": solid_stl,
         "fluid_stl_path": fluid_stl,
         "artifact_vtk_path": vtk_zip
+    }
+
+
+@mcp.tool()
+def gencad_retrieve_from_physics(physics_target: Dict[str, float], top_k: int = 3) -> Dict[str, Any]:
+    """
+    GenCAD MCP Tool: Query nearest CAD programs in contrastive physics-latent space given a CFD target profile.
+    """
+    driver = GenCADDriver()
+    matches = driver.retrieve_cad_program(physics_target, top_k=top_k)
+    return {
+        "status": "success",
+        "physics_target": physics_target,
+        "matches": matches
+    }
+
+
+@mcp.tool()
+def gencad_synthesize_script(
+    physics_target: Dict[str, float],
+    format_type: str = "build123d",
+    filename_prefix: str = "mcp_gencad_synthesized"
+) -> Dict[str, Any]:
+    """
+    GenCAD MCP Tool: Synthesize build123d/OpenSCAD script directly conditioned on CFD physics targets using PyTorch Transformer.
+    """
+    driver = GenCADDriver()
+    res = driver.generate_and_export(
+        physics_target=physics_target,
+        output_dir="artifacts",
+        filename_prefix=filename_prefix,
+        format_type=format_type,
+        use_transformer_sequence=True
+    )
+    return res
+
+
+@mcp.tool()
+def gencad_retrieve_from_image(image_path: str, top_k: int = 3) -> Dict[str, Any]:
+    """
+    GenCAD MCP Tool: Retrieve nearest CAD programs matching a 2D CAD render image or STL wireframe.
+    """
+    driver = GenCADDriver()
+    matches = driver.retrieve_cad_from_image(image_path, top_k=top_k)
+    return {
+        "status": "success",
+        "image_path": image_path,
+        "matches": matches
+    }
+
+
+@mcp.tool()
+def gencad_sample_diverse(
+    physics_target: Dict[str, float],
+    n_samples: int = 3,
+    temperature: float = 0.8
+) -> Dict[str, Any]:
+    """
+    GenCAD MCP Tool: Sample N diverse CAD AST sequence variations for a target CFD physics prompt using Latent Diffusion Noise Sampling.
+    """
+    driver = GenCADDriver()
+    samples = driver.sample_diverse_cad_programs(physics_target, n_samples=n_samples, temperature=temperature)
+    return {
+        "status": "success",
+        "physics_target": physics_target,
+        "samples": samples
     }
 
 
