@@ -48,3 +48,4 @@ corkscrewFilter/constant/turbulenceProperties
 .pip_install.log
 publication.pdf
 test_meshing3.log
+server.log
