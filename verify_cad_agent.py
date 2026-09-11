@@ -31,7 +31,7 @@ from llm_agent import LLMAgent
 
 def test_tool_schemas():
     print("\n--- Test 1: JSON Tool Schemas (OpenAI / Kimi / Gemini compatible) ---")
-    assert len(CAD_TOOLS_SCHEMA) == 6, f"Expected 6 tools, found {len(CAD_TOOLS_SCHEMA)}"
+    assert len(CAD_TOOLS_SCHEMA) == 8, f"Expected 8 tools, found {len(CAD_TOOLS_SCHEMA)}"
 
     expected_tool_names = {
         "predict_surrogate",
@@ -39,7 +39,9 @@ def test_tool_schemas():
         "check_physics_conservation",
         "dispatch_simulation",
         "check_simulation_status",
-        "generate_scad_code"
+        "generate_scad_code",
+        "retrieve_cad_from_physics_target",
+        "synthesize_gencad_script"
     }
 
     actual_names = set()
