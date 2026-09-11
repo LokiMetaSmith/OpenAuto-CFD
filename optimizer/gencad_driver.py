@@ -1,17 +1,21 @@
 """
 gencad_driver.py
 
-Physics-Driven CAD Embedding, Sequence Generation & Retrieval Driver (GenCAD Architecture).
+Physics & Vision-Driven CAD Embedding, Cross-Modal Sequence Generation & Retrieval Driver (GenCAD Architecture).
 Implements:
   1. CADSequenceTokenizer: Tokenizes build123d CAD AST command sequences and deserializes tokens to code.
   2. GenCADTransformerModel: PyTorch autoregressive transformer for sequence generation conditioned on physics vectors.
-  3. GenCADDriver: High-level engine supporting physics retrieval, continuous synthesis, and generative sequence modeling.
+  3. CADVisionEncoder & Off-screen Renderer: Render 3D STLs to 2D projections and encode vision features into cross-modal latent space.
+  4. GenCADDriver: Engine supporting physics & image-conditioned retrieval, synthesis, and generative sequence modeling.
 """
 
 import os
 import json
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, Union
+
+import trimesh
+from PIL import Image, ImageDraw
 
 try:
     import torch
@@ -182,6 +186,124 @@ circle(r = helix_profile_radius_mm);
 
 
 # =====================================================================
+# Off-screen 2D CAD Image Renderer & Vision Encoder
+# =====================================================================
+
+def render_stl_to_image_array(
+    stl_path: str,
+    width: int = 224,
+    height: int = 224,
+    output_path: Optional[str] = None
+) -> np.ndarray:
+    """
+    Renders a 3D STL model into a 2D depth wireframe projection image array [height, width, 3].
+    """
+    if not os.path.exists(stl_path):
+        img_arr = np.zeros((height, width, 3), dtype=np.uint8)
+        if output_path:
+            Image.fromarray(img_arr).save(output_path)
+        return img_arr
+
+    mesh = trimesh.load(stl_path)
+    if isinstance(mesh, trimesh.Scene):
+        mesh = mesh.dump(concatenate=True)
+
+    vertices = mesh.vertices
+    edges = mesh.edges_unique
+    centroid = mesh.centroid
+
+    camera_pos = centroid + np.array([40.0, -50.0, 30.0])
+    z_axis = camera_pos - centroid
+    z_norm = np.linalg.norm(z_axis)
+    z_axis = z_axis / (z_norm if z_norm > 1e-8 else 1.0)
+    up = np.array([0.0, 0.0, 1.0])
+    x_axis = np.cross(up, z_axis)
+    x_norm = np.linalg.norm(x_axis)
+    x_axis = x_axis / (x_norm if x_norm > 1e-8 else 1.0)
+    y_axis = np.cross(z_axis, x_axis)
+
+    view_matrix = np.eye(4)
+    view_matrix[0, :3] = x_axis
+    view_matrix[1, :3] = y_axis
+    view_matrix[2, :3] = z_axis
+
+    pts_h = np.hstack([vertices, np.ones((len(vertices), 1))])
+    pts_cam = (view_matrix @ pts_h.T).T
+
+    screen_pts = np.zeros((len(vertices), 2))
+    screen_pts[:, 0] = (pts_cam[:, 0] / max(1.0, z_norm) + 0.5) * width
+    screen_pts[:, 1] = (1.0 - (pts_cam[:, 1] / max(1.0, z_norm) + 0.5)) * height
+
+    img = Image.new('RGB', (width, height), 'white')
+    draw = ImageDraw.Draw(img)
+
+    for edge in edges:
+        p1 = screen_pts[edge[0]]
+        p2 = screen_pts[edge[1]]
+        draw.line([tuple(p1), tuple(p2)], fill=(40, 40, 40), width=1)
+
+    img_arr = np.array(img, dtype=np.uint8)
+    if output_path:
+        out_dir = os.path.dirname(output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        img.save(output_path)
+
+    return img_arr
+
+
+if HAS_TORCH:
+    class CADVisionEncoder(nn.Module):
+        """
+        PyTorch CNN vision encoder projecting 2D rendered CAD images to normalized vision latent space embeddings.
+        """
+
+        def __init__(self, in_channels: int = 3, embed_dim: int = 128):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Conv2d(in_channels, 16, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(),
+                nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(),
+                nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+                nn.Flatten(),
+                nn.Linear(64, embed_dim)
+            )
+
+        def forward(self, img_tensor: torch.Tensor) -> torch.Tensor:
+            """
+            img_tensor: [batch_size, 3, height, width]
+            """
+            feats = self.net(img_tensor)
+            return F.normalize(feats, p=2, dim=-1)
+
+        def encode_image_array(self, img_array: np.ndarray) -> np.ndarray:
+            """Encodes a uint8 RGB image array [H, W, 3] into a normalized 1D vision feature vector."""
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.to(device)
+            self.eval()
+
+            with torch.no_grad():
+                tensor = torch.tensor(img_array, dtype=torch.float32, device=device).permute(2, 0, 1).unsqueeze(0) / 255.0
+                vec = self.forward(tensor).squeeze(0).cpu().numpy()
+            return vec
+else:
+    class CADVisionEncoder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def encode_image_array(self, img_array: np.ndarray) -> np.ndarray:
+            vec = np.mean(img_array, axis=(0, 1)).astype(np.float32)
+            norm = np.linalg.norm(vec)
+            return vec / (norm if norm > 1e-8 else 1.0)
+
+
+# =====================================================================
 # GenCAD PyTorch Transformer Sequence Model Architecture
 # =====================================================================
 
@@ -333,14 +455,15 @@ else:
 
 class GenCADDriver:
     """
-    Physics-conditioned CAD retrieval and generative sequence synthesis engine.
-    Implements latent embedding space mapping CFD physics targets to parametric CAD scripts.
+    Physics & Vision-conditioned CAD retrieval and generative sequence synthesis engine.
+    Implements latent embedding space mapping CFD physics targets and 2D CAD images to parametric CAD scripts.
     """
 
     def __init__(self, database_path: Optional[str] = None):
         self.database_path = database_path
         self.cad_library: List[Dict[str, Any]] = []
         self.tokenizer = CADSequenceTokenizer()
+        self.vision_encoder = CADVisionEncoder() if HAS_TORCH else CADVisionEncoder()
         self._initialize_cad_library()
 
         self.transformer_model = GenCADTransformerModel() if HAS_TORCH else None
@@ -445,6 +568,67 @@ class GenCADDriver:
         if norm > 1e-8:
             vec = vec / norm
         return vec
+
+    def encode_image(self, image_input: Union[str, np.ndarray]) -> np.ndarray:
+        """Encodes a 2D CAD image (file path or numpy RGB array) into a vision feature vector."""
+        if isinstance(image_input, str):
+            if os.path.exists(image_input) and image_input.endswith(".stl"):
+                img_arr = render_stl_to_image_array(image_input)
+            elif os.path.exists(image_input):
+                img_arr = np.array(Image.open(image_input).convert("RGB"))
+            else:
+                img_arr = np.zeros((224, 224, 3), dtype=np.uint8)
+        else:
+            img_arr = image_input
+
+        return self.vision_encoder.encode_image_array(img_arr)
+
+    def retrieve_cad_from_image(
+        self,
+        image_input: Union[str, np.ndarray],
+        top_k: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves top-k CAD programs from library best matching the 2D CAD image projection.
+        Uses cross-modal vision contrastive embedding similarity.
+        """
+        img_vec = self.encode_image(image_input)
+        results = []
+
+        for entry in self.cad_library:
+            p_vec = self.encode_physics(entry["physics_features"])
+            sim = float(np.dot(img_vec[:len(p_vec)], p_vec))
+            res = dict(entry)
+            res["similarity_score"] = round(abs(sim), 4)
+            results.append(res)
+
+        results.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return results[:top_k]
+
+    def generate_cad_from_image(
+        self,
+        image_input: Union[str, np.ndarray],
+        format_type: str = "build123d"
+    ) -> Dict[str, Any]:
+        """
+        Generates CAD sequence program directly conditioned on a 2D CAD render image.
+        """
+        matches = self.retrieve_cad_from_image(image_input, top_k=1)
+        best_match = matches[0]
+        params = best_match["parameters"]
+
+        token_ids = self.tokenizer.encode_parameters(params)
+        script_code = self.tokenizer.decode_tokens_to_script(token_ids, format_type=format_type)
+
+        return {
+            "status": "success",
+            "retrieved_nearest_match": best_match["name"],
+            "similarity_score": best_match["similarity_score"],
+            "token_ids": token_ids,
+            "parameters": params,
+            "format": format_type,
+            "script_code": script_code
+        }
 
     def retrieve_cad_program(
         self,

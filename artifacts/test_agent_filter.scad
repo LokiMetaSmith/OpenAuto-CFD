@@ -1,13 +1,13 @@
 // ====================================================================
 // Auto-Generated Parametric Corkscrew Filter
 // Optimized via Multi-Physics Surrogate & PINN Conservation Regularizer
-// Generated: 2026-09-11 04:12:01
+// Generated: 2026-09-11 06:03:12
 // ====================================================================
 
 $fn = 60;
 
 // Optimized Design Parameters
-number_of_complete_revolutions = 3.170;
+number_of_complete_revolutions = 3.169;
 helix_path_radius_mm = 2.243;
 helix_profile_radius_mm = 1.634;
 blade_chamfer_mm = 1.000;

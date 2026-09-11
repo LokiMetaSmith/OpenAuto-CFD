@@ -1,12 +1,13 @@
 """
 verify_gencad.py
 
-Verification suite for GenCAD (Physics-Driven CAD Embedding, AST Sequence Tokenization & Transformer Model):
+Verification suite for GenCAD (Physics & Cross-Modal Vision-Driven CAD Embedding, AST Sequence Tokenization & Transformer Model):
   1. Test Physics Encoding & Contrastive Latent Retrieval (top-k nearest CAD programs).
   2. Test CAD Sequence Tokenizer (AST Token encoding and Python build123d deserialization).
   3. Test PyTorch GenCADTransformerModel autoregressive sequence inference.
-  4. Test CAD Engine Factory integration & STL export to confirm clean connection to downstream CFD meshing.
-  5. Test CADAgentToolRegistry GenCAD tool integration.
+  4. Test Phase 2 Cross-Modal Vision Rendering & Image-Conditioned CAD Generation.
+  5. Test CAD Engine Factory integration & STL export to confirm clean connection to downstream CFD meshing.
+  6. Test CADAgentToolRegistry GenCAD tool integration (physics & vision tools).
 """
 
 import os
@@ -19,6 +20,7 @@ from gencad_driver import (
     GenCADDriver,
     CADSequenceTokenizer,
     GenCADTransformerModel,
+    render_stl_to_image_array,
     HAS_TORCH
 )
 from cad_agent_tools import CADAgentToolRegistry
@@ -116,8 +118,35 @@ def test_gencad_transformer_model():
     print("[PASS] Test 3: PyTorch GenCAD Transformer model sequence generation validated.")
 
 
+def test_gencad_cross_modal_vision():
+    print("\n--- Test 4: Phase 2 Cross-Modal Vision Rendering & Image Generation ---")
+    driver = GenCADDriver()
+    stl_path = "artifacts/gencad_mesh_test.stl"
+    img_out = "artifacts/test_wireframe.png"
+
+    # 1. Render 3D STL to 2D wireframe PNG image
+    img_arr = render_stl_to_image_array(stl_path, output_path=img_out)
+    assert img_arr.shape == (224, 224, 3)
+    assert os.path.exists(img_out)
+    print(f"  Rendered 3D STL to 2D image '{img_out}' ({os.path.getsize(img_out)} bytes)")
+
+    # 2. Retrieve CAD program from 2D image input
+    matches = driver.retrieve_cad_from_image(img_out, top_k=2)
+    assert len(matches) == 2
+    top_match = matches[0]["name"]
+    print(f"  Retrieved CAD program from 2D image: '{top_match}' (sim: {matches[0]['similarity_score']})")
+
+    # 3. Generate executable build123d script from 2D image
+    gen_res = driver.generate_cad_from_image(img_out, format_type="build123d")
+    assert gen_res["status"] == "success"
+    assert "from build123d import *" in gen_res["script_code"]
+    print(f"  Generated CAD script from image successfully.")
+
+    print("[PASS] Test 4: Phase 2 Cross-Modal Vision rendering and image-conditioned generation validated.")
+
+
 def test_cad_factory_downstream_meshing_connection():
-    print("\n--- Test 4: Downstream CAD Meshing Connection ---")
+    print("\n--- Test 5: Downstream CAD Meshing Connection ---")
     driver = GenCADDriver()
 
     target_cfd = {
@@ -160,11 +189,11 @@ def test_cad_factory_downstream_meshing_connection():
     print(f"  Generated STL at '{stl_out}' ({os.path.getsize(stl_out)} bytes)")
     print(f"  Bounding box calculated for downstream meshing: min={min_pt}, max={max_pt}")
 
-    print("[PASS] Test 4: Downstream CFD meshing connection confirmed.")
+    print("[PASS] Test 5: Downstream CFD meshing connection confirmed.")
 
 
 def test_cad_agent_tool_registry_gencad_integration():
-    print("\n--- Test 5: CADAgentToolRegistry GenCAD Tool Integration ---")
+    print("\n--- Test 6: CADAgentToolRegistry GenCAD Tool Integration ---")
     registry = CADAgentToolRegistry(artifacts_dir="artifacts")
 
     # 1. Test retrieve_cad_from_physics_target tool
@@ -176,25 +205,35 @@ def test_cad_agent_tool_registry_gencad_integration():
     assert len(ret_res["matches"]) == 2
     print(f"  retrieve_cad_from_physics_target: top match = '{ret_res['matches'][0]['name']}'")
 
-    # 2. Test synthesize_gencad_script tool
-    syn_res = registry.execute_tool(
-        "synthesize_gencad_script",
-        {"physics_target": {"delta_p": 2600.0, "separation_efficiency": 96.0}, "format_type": "build123d"}
+    # 2. Test retrieve_cad_from_image tool
+    ret_img_res = registry.execute_tool(
+        "retrieve_cad_from_image",
+        {"image_path": "artifacts/test_wireframe.png", "top_k": 2}
     )
-    assert syn_res["status"] == "success"
-    assert os.path.exists(syn_res["output_file"])
-    print(f"  synthesize_gencad_script: generated {syn_res['output_file']}")
+    assert ret_img_res["status"] == "success"
+    assert len(ret_img_res["matches"]) == 2
+    print(f"  retrieve_cad_from_image: top match = '{ret_img_res['matches'][0]['name']}'")
 
-    print("[PASS] Test 5: GenCAD agent tools executed cleanly via registry.")
+    # 3. Test generate_cad_from_image tool
+    gen_img_res = registry.execute_tool(
+        "generate_cad_from_image",
+        {"image_path": "artifacts/test_wireframe.png", "format_type": "build123d"}
+    )
+    assert gen_img_res["status"] == "success"
+    assert "from build123d import *" in gen_img_res["script_code"]
+    print(f"  generate_cad_from_image: generated code successfully.")
+
+    print("[PASS] Test 6: GenCAD agent physics and vision tools executed cleanly via registry.")
 
 
 if __name__ == "__main__":
     print("================================================================")
-    print("  RUNNING GENCAD TRANSFORMER & AST SEQUENCE GENERATION SUITE    ")
+    print("  RUNNING GENCAD TRANSFORMER & CROSS-MODAL VISION SUITE        ")
     print("================================================================")
     test_gencad_encoding_and_retrieval()
     test_cad_sequence_tokenizer_and_ast()
     test_gencad_transformer_model()
+    test_gencad_cross_modal_vision()
     test_cad_factory_downstream_meshing_connection()
     test_cad_agent_tool_registry_gencad_integration()
-    print("\n>>> ALL GENCAD TRANSFORMER SEQUENCE TESTS PASSED SUCCESSFULLY! <<<")
+    print("\n>>> ALL GENCAD TRANSFORMER & CROSS-MODAL VISION TESTS PASSED SUCCESSFULLY! <<<")

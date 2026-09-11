@@ -11,6 +11,8 @@ Equips the LLM with native function-calling tools to:
   6. generate_scad_code: Geometric validation and OpenSCAD parametric code generation.
   7. retrieve_cad_from_physics_target: GenCAD latent space retrieval of CAD models given CFD performance targets.
   8. synthesize_gencad_script: GenCAD parameter synthesis and OpenSCAD/build123d script export conditioned on CFD targets.
+  9. retrieve_cad_from_image: GenCAD cross-modal vision retrieval of CAD programs matching 2D render image.
+ 10. generate_cad_from_image: GenCAD cross-modal synthesis generating CAD AST script directly conditioned on 2D image.
 """
 
 import os
@@ -213,6 +215,49 @@ CAD_TOOLS_SCHEMA = [
                 "required": ["physics_target"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_cad_from_image",
+            "description": "GenCAD cross-modal vision tool that queries nearest CAD programs matching a 2D CAD render or STL wireframe image.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to 2D image or 3D STL file to render and encode."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "default": 3
+                    }
+                },
+                "required": ["image_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_cad_from_image",
+            "description": "GenCAD cross-modal vision tool that generates executable build123d/OpenSCAD script directly conditioned on a 2D CAD image projection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to 2D image or STL file."
+                    },
+                    "format_type": {
+                        "type": "string",
+                        "enum": ["openscad", "build123d"],
+                        "default": "build123d"
+                    }
+                },
+                "required": ["image_path"]
+            }
+        }
     }
 ]
 
@@ -329,6 +374,10 @@ class CADAgentToolRegistry:
                 return self._tool_retrieve_cad_from_physics_target(arguments)
             elif name == "synthesize_gencad_script":
                 return self._tool_synthesize_gencad_script(arguments)
+            elif name == "retrieve_cad_from_image":
+                return self._tool_retrieve_cad_from_image(arguments)
+            elif name == "generate_cad_from_image":
+                return self._tool_generate_cad_from_image(arguments)
             else:
                 return {"error": f"Unknown tool: '{name}'"}
         except Exception as e:
@@ -522,6 +571,22 @@ union() {{
             filename_prefix=prefix,
             format_type=format_type
         )
+        return res
+
+    def _tool_retrieve_cad_from_image(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        img_path = args.get("image_path")
+        top_k = args.get("top_k", 3)
+        matches = self.gencad_driver.retrieve_cad_from_image(img_path, top_k=top_k)
+        return {
+            "status": "success",
+            "image_path": img_path,
+            "matches": matches
+        }
+
+    def _tool_generate_cad_from_image(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        img_path = args.get("image_path")
+        fmt = args.get("format_type", "build123d")
+        res = self.gencad_driver.generate_cad_from_image(img_path, format_type=fmt)
         return res
 
 
