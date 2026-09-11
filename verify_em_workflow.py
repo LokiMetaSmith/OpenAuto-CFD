@@ -5,7 +5,7 @@ import shutil
 # Add optimizer to path
 sys.path.append(os.path.abspath("optimizer"))
 
-from em_driver import OpenEMSDriver
+from em_driver import OpenEMSDriver, export_3d_farfield_pattern
 from scad_driver import ScadDriver
 import simulation_runner
 
@@ -54,8 +54,7 @@ def test_em_workflow():
     metrics = em.get_metrics()
     print(f"Metrics: {metrics}")
 
-    print("Step 4: Checking VTK Export...")
-    # Read script to debug if it was generated correctly
+    print("Step 4: Checking VTK Export & 3D Radiation Pattern...")
     script_path = os.path.join(em.case_dir, "run_em_simulation.py")
     if os.path.exists(script_path):
         print("run_em_simulation.py exists.")
@@ -67,12 +66,17 @@ def test_em_workflow():
         print(f"VTK Directory: {vtk_path}")
         files = os.listdir(vtk_path)
         print(f"Files in VTK dir: {files}")
-        if "field_data.vtk" in files:
-            print("VTK Export verified: field_data.vtk found.")
+        if "field_data.vtk" in files and "radiation_pattern_3d.vtk" in files:
+            print("VTK Export verified: field_data.vtk & radiation_pattern_3d.vtk found.")
         else:
-            print("VTK Export FAILED: field_data.vtk missing.")
+            print("VTK Export FAILED: field_data or radiation_pattern_3d missing.")
     else:
         print("VTK Export FAILED: generate_vtk returned None")
+
+    # Direct 3D farfield pattern test
+    rad_ok = export_3d_farfield_pattern(os.path.join(case_dir, "test_pattern.vtk"), center_freq_ghz=2.45)
+    assert rad_ok, "Far-field 3D pattern export failed"
+    print("3D Far-Field Radiation Pattern VTK Export verified.")
 
     # Cleanup
     em.cleanup_ram_disk()

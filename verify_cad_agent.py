@@ -31,7 +31,7 @@ from llm_agent import LLMAgent
 
 def test_tool_schemas():
     print("\n--- Test 1: JSON Tool Schemas (OpenAI / Kimi / Gemini compatible) ---")
-    assert len(CAD_TOOLS_SCHEMA) == 10, f"Expected 10 tools, found {len(CAD_TOOLS_SCHEMA)}"
+    assert len(CAD_TOOLS_SCHEMA) == 11, f"Expected 11 tools, found {len(CAD_TOOLS_SCHEMA)}"
 
     expected_tool_names = {
         "predict_surrogate",
@@ -43,7 +43,8 @@ def test_tool_schemas():
         "retrieve_cad_from_physics_target",
         "synthesize_gencad_script",
         "retrieve_cad_from_image",
-        "generate_cad_from_image"
+        "generate_cad_from_image",
+        "sample_diverse_cad_programs"
     }
 
     actual_names = set()
@@ -59,7 +60,7 @@ def test_tool_schemas():
         print(f"  [OK] Validated tool schema: '{name}'")
 
     assert actual_names == expected_tool_names, f"Mismatch in tool names: {actual_names}"
-    print("[PASS] Test 1: All 10 CAD & Multi-Physics tool schemas validated.")
+    print("[PASS] Test 1: All 11 CAD & Multi-Physics tool schemas validated.")
 
 
 def test_registry_tools():

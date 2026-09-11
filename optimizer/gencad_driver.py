@@ -4,9 +4,9 @@ gencad_driver.py
 Physics & Vision-Driven CAD Embedding, Cross-Modal Sequence Generation & Retrieval Driver (GenCAD Architecture).
 Implements:
   1. CADSequenceTokenizer: Tokenizes build123d CAD AST command sequences and deserializes tokens to code.
-  2. GenCADTransformerModel: PyTorch autoregressive transformer for sequence generation conditioned on physics vectors.
+  2. GenCADTransformerModel: PyTorch autoregressive transformer with temperature & latent noise sampling for sample diversity.
   3. CADVisionEncoder & Off-screen Renderer: Render 3D STLs to 2D projections and encode vision features into cross-modal latent space.
-  4. GenCADDriver: Engine supporting physics & image-conditioned retrieval, synthesis, and generative sequence modeling.
+  4. GenCADDriver: Engine supporting physics & image-conditioned retrieval, synthesis, latent diffusion sampling, and sequence modeling.
 """
 
 import os
@@ -201,6 +201,9 @@ def render_stl_to_image_array(
     if not os.path.exists(stl_path):
         img_arr = np.zeros((height, width, 3), dtype=np.uint8)
         if output_path:
+            out_dir = os.path.dirname(output_path)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
             Image.fromarray(img_arr).save(output_path)
         return img_arr
 
@@ -436,6 +439,56 @@ if HAS_TORCH:
                     generated.append(next_token_id)
 
             return generated
+
+        def sample_diverse_sequences(
+            self,
+            physics_vec: np.ndarray,
+            tokenizer: CADSequenceTokenizer,
+            n_samples: int = 3,
+            temperature: float = 0.8,
+            noise_scale: float = 0.15,
+            max_len: int = 32,
+            device: Optional[str] = None
+        ) -> List[List[int]]:
+            """
+            Latent Diffusion Sampler: Applies latent noise perturbation and temperature sampling
+            to generate N diverse CAD AST token sequences for the same input physics prompt.
+            """
+            if device is None:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            self.to(device)
+            self.eval()
+
+            samples = []
+            with torch.no_grad():
+                base_p = torch.tensor(physics_vec, dtype=torch.float32, device=device).unsqueeze(0)
+
+                for idx in range(n_samples):
+                    # Latent noise perturbation
+                    noise = torch.randn_like(base_p) * (noise_scale if idx > 0 else 0.0)
+                    p_tensor = base_p + noise
+                    generated = [tokenizer.bos_id]
+
+                    for _ in range(max_len):
+                        tgt_tensor = torch.tensor([generated], dtype=torch.long, device=device)
+                        logits = self.forward(p_tensor, tgt_tensor)
+                        next_token_logits = logits[0, -1, :] / max(1e-4, temperature)
+
+                        probs = F.softmax(next_token_logits, dim=-1)
+                        if idx == 0:
+                            next_token_id = int(torch.argmax(probs).item())
+                        else:
+                            next_token_id = int(torch.multinomial(probs, num_samples=1).item())
+
+                        if next_token_id == tokenizer.eos_id:
+                            generated.append(next_token_id)
+                            break
+                        generated.append(next_token_id)
+
+                    samples.append(generated)
+
+            return samples
 else:
     class GenCADTransformerModel:
         """Fallback mock class when PyTorch is not available."""
@@ -447,6 +500,13 @@ else:
 
         def generate_sequence(self, physics_vec, tokenizer, **kwargs):
             return tokenizer.encode_parameters({"number_of_complete_revolutions": 2.5})
+
+        def sample_diverse_sequences(self, physics_vec, tokenizer, n_samples=3, **kwargs):
+            revs = [1.5, 2.5, 3.8]
+            res = []
+            for i in range(min(n_samples, len(revs))):
+                res.append(tokenizer.encode_parameters({"number_of_complete_revolutions": revs[i]}))
+            return res
 
 
 # =====================================================================
@@ -629,6 +689,39 @@ class GenCADDriver:
             "format": format_type,
             "script_code": script_code
         }
+
+    def sample_diverse_cad_programs(
+        self,
+        physics_target: Dict[str, float],
+        n_samples: int = 3,
+        temperature: float = 0.8,
+        format_type: str = "build123d"
+    ) -> List[Dict[str, Any]]:
+        """
+        Generates N diverse CAD AST token sequences and scripts for the same physics prompt
+        using Latent Diffusion Noise Sampling.
+        """
+        p_vec = self.encode_physics(physics_target)
+        if self.transformer_model:
+            seq_list = self.transformer_model.sample_diverse_sequences(
+                p_vec, self.tokenizer, n_samples=n_samples, temperature=temperature
+            )
+        else:
+            synth_p = self.synthesize_cad_parameters(physics_target)
+            seq_list = [self.tokenizer.encode_parameters(synth_p) for _ in range(n_samples)]
+
+        results = []
+        for i, token_ids in enumerate(seq_list):
+            params = self.tokenizer.decode_tokens_to_parameters(token_ids)
+            script_code = self.tokenizer.decode_tokens_to_script(token_ids, format_type=format_type)
+            results.append({
+                "sample_id": i + 1,
+                "token_ids": token_ids,
+                "parameters": params,
+                "script_code": script_code
+            })
+
+        return results
 
     def retrieve_cad_program(
         self,
