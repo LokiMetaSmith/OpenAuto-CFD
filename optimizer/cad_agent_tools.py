@@ -13,6 +13,7 @@ Equips the LLM with native function-calling tools to:
   8. synthesize_gencad_script: GenCAD parameter synthesis and OpenSCAD/build123d script export conditioned on CFD targets.
   9. retrieve_cad_from_image: GenCAD cross-modal vision retrieval of CAD programs matching 2D render image.
  10. generate_cad_from_image: GenCAD cross-modal synthesis generating CAD AST script directly conditioned on 2D image.
+ 11. sample_diverse_cad_programs: GenCAD latent diffusion sampler generating N diverse CAD sequence variations.
 """
 
 import os
@@ -258,6 +259,31 @@ CAD_TOOLS_SCHEMA = [
                 "required": ["image_path"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sample_diverse_cad_programs",
+            "description": "GenCAD latent diffusion sampler tool that generates N diverse CAD sequence program variations for a target CFD physics profile.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "physics_target": {
+                        "type": "object",
+                        "description": "Target physics feature dictionary e.g. {'delta_p': 2500, 'separation_efficiency': 95}."
+                    },
+                    "n_samples": {
+                        "type": "integer",
+                        "default": 3
+                    },
+                    "temperature": {
+                        "type": "number",
+                        "default": 0.8
+                    }
+                },
+                "required": ["physics_target"]
+            }
+        }
     }
 ]
 
@@ -378,6 +404,8 @@ class CADAgentToolRegistry:
                 return self._tool_retrieve_cad_from_image(arguments)
             elif name == "generate_cad_from_image":
                 return self._tool_generate_cad_from_image(arguments)
+            elif name == "sample_diverse_cad_programs":
+                return self._tool_sample_diverse_cad_programs(arguments)
             else:
                 return {"error": f"Unknown tool: '{name}'"}
         except Exception as e:
@@ -588,6 +616,18 @@ union() {{
         fmt = args.get("format_type", "build123d")
         res = self.gencad_driver.generate_cad_from_image(img_path, format_type=fmt)
         return res
+
+    def _tool_sample_diverse_cad_programs(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        p_target = args.get("physics_target", {})
+        n = args.get("n_samples", 3)
+        temp = args.get("temperature", 0.8)
+        samples = self.gencad_driver.sample_diverse_cad_programs(p_target, n_samples=n, temperature=temp)
+        return {
+            "status": "success",
+            "physics_target": p_target,
+            "n_samples": len(samples),
+            "samples": samples
+        }
 
 
 # =====================================================================

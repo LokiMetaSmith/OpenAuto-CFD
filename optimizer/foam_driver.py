@@ -1171,9 +1171,10 @@ method          {method};
         else:
             print("Warning: controlDict.template not found. Skipping function object injection.")
 
-    def update_blockMesh(self, bounds, margin=(1.2, 1.2, 0.9), target_cell_size=1.5):
+    def update_blockMesh(self, bounds, margin=(1.2, 1.2, 0.9), target_cell_size=1.5, channel_gap_mm=None):
         """
-        Updates system/blockMeshDict with new bounds.
+        Updates system/blockMeshDict with new bounds and dynamically adjusts
+        cell resolution so at least 4 to 5 base cells fit across narrow channel gaps.
         """
         # Check for None explicitly to handle numpy array ambiguity
         if bounds is None or bounds[0] is None:
@@ -1181,33 +1182,37 @@ method          {method};
             return
 
         self.bounds = bounds
-        min_pt, max_pt = bounds
+        min_pt = np.array(bounds[0], dtype=np.float32)
+        max_pt = np.array(bounds[1], dtype=np.float32)
+
+        # Dynamic cell resolution tuning for narrow channel gaps
+        if channel_gap_mm is not None and channel_gap_mm > 0:
+            target_cell_size = max(0.2, min(target_cell_size, float(channel_gap_mm) / 4.5))
 
         # Ensure margin is array-like
         try:
             # Check if iterable
             iter(margin)
-            margin_arr = np.array(margin)
+            margin_arr = np.array(margin, dtype=np.float32)
         except TypeError:
             # Scalar
-            margin_arr = np.array([margin, margin, margin])
+            margin_arr = np.array([margin, margin, margin], dtype=np.float32)
 
-        center = (min_pt + max_pt) / 2
+        center = (min_pt + max_pt) / 2.0
         size = (max_pt - min_pt) * margin_arr
 
         new_min = center - size / 2
         new_max = center + size / 2
 
         # Calculate cell counts based on target resolution
-        # target_cell_size is passed in (default 1.5mm)
         nx = max(1, int(math.ceil(size[0] / target_cell_size)))
         ny = max(1, int(math.ceil(size[1] / target_cell_size)))
         nz = max(1, int(math.ceil(size[2] / target_cell_size)))
 
         # Ensure minimum resolution
-        nx = max(10, nx)
-        ny = max(10, ny)
-        nz = max(10, nz)
+        nx = max(12, nx)
+        ny = max(12, ny)
+        nz = max(12, nz)
 
         print(f"Calculated blockMesh resolution: ({nx} {ny} {nz})")
 
