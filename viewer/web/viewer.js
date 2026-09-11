@@ -19,6 +19,17 @@ let last3DTranslocationTrigger = 0;
 let currentClampingTorque = 0.5;
 let currentClampingAnalysis = null;
 
+// Mold Mode Particle State
+let moldParticleStage = new Uint8Array(N_PARTICLES);
+let moldParticleY = new Float32Array(N_PARTICLES);
+let moldParticleZ = new Float32Array(N_PARTICLES);
+let moldParticleX = new Float32Array(N_PARTICLES);
+let moldParticleTrack = new Float32Array(N_PARTICLES);
+let moldParticleTrackX = new Float32Array(N_PARTICLES);
+let moldParticleSpeed = new Float32Array(N_PARTICLES);
+let moldFillAnimationId = null;
+let isMoldFilling = false;
+
 let currentDomain = "cfd";
 let currentFidelity = "tier1";
 let currentParams = {};
@@ -314,14 +325,23 @@ const DAEMON_PORE_PARAM_DEFS = {
   buffer_conc_m: { min: 0.1, max: 3.0, default: 1.0, step: 0.05, unit: "M", label: "KCl Buffer Conc (C_KCl)" }
 };
 
+const DAEMON_MOLD_PARAM_DEFS = {
+  explode_gap_mm: { min: 0.0, max: 35.0, default: 0.0, step: 0.5, unit: "mm", label: "Parting Gap (Slide Apart)" },
+  injection_pressure_psi: { min: 0.1, max: 15.0, default: 3.5, step: 0.1, unit: "PSI", label: "Applied Injection Pressure (P_inj)" },
+  pdms_viscosity_pas: { min: 1.0, max: 10.0, default: 3.5, step: 0.1, unit: "Pa·s", label: "PDMS Dynamic Viscosity (µ)" },
+  flow_rate_ml_min: { min: 0.5, max: 20.0, default: 5.0, step: 0.5, unit: "mL/min", label: "Target Flow Rate (Q)" },
+  mold_temp_c: { min: 20.0, max: 70.0, default: 25.0, step: 1.0, unit: "°C", label: "Mold Temperature (T_mold)" },
+  fill_progress_pct: { min: 0.0, max: 100.0, default: 100.0, step: 1.0, unit: "%", label: "Cavity Fill Progress" }
+};
+
 let daemonExplodeGap = 0.0;
 let daemonAssemblyManifest = null;
 
-async function fetchBuild123dPartGeometry(partId, tolerance = 0.1) {
+async function fetchBuild123dPartGeometry(partId, tolerance = 0.1, forceRefresh = false) {
   const cacheKey = `b123d_${partId}_tol_${tolerance}`;
-  if (daemonCadCache[cacheKey]) return daemonCadCache[cacheKey];
+  if (!forceRefresh && daemonCadCache[cacheKey]) return daemonCadCache[cacheKey];
   try {
-    const res = await fetch(`/api/project/build123d_part?project_id=daemon-pore&part_id=${partId}&tolerance=${tolerance}`);
+    const res = await fetch(`/api/project/build123d_part?project_id=daemon-pore&part_id=${partId}&tolerance=${tolerance}&_t=${Date.now()}`);
     if (!res.ok) {
       console.warn(`Build123d part fetch failed for ${partId}:`, res.statusText);
       return null;
@@ -410,16 +430,21 @@ function getDaemonChannelHeights(mode = daemonGeometryMode, explode = daemonExpl
   const gap = (explode !== undefined) ? explode : daemonExplodeGap;
   if (mode === "channels") {
     const zBot = 0.8 + 0 * gap;
-    const zPore = 2.0 + 1 * gap;
+    const zPore = 2.0 + 1.5 * gap;
     const zTop = 3.2 + 2 * gap;
+    return { zTop, zPore, zBot, yTop: zTop, yPore: zPore, yBot: zBot };
+  } else if (mode === "system" || mode === "full_system") {
+    const zBot = 37.8 + 1.5 * gap;
+    const zPore = 39.0 + 1.95 * gap;
+    const zTop = 40.2 + 2.1 * gap;
     return { zTop, zPore, zBot, yTop: zTop, yPore: zPore, yBot: zBot };
   } else if (mode === "enclosure" || mode === "assembly") {
     return { zTop: 16.0, zPore: 14.5, zBot: 13.0, yTop: 16.0, yPore: 14.5, yBot: 13.0 };
   } else {
     // "cartridge" or "stack"
-    const zBot = 8.8 + 2 * gap;
-    const zPore = 10.0 + 3 * gap;
-    const zTop = 11.2 + 4 * gap;
+    const zBot = 7.8 + 1.0 * gap;
+    const zPore = 9.0 + 1.75 * gap;
+    const zTop = 10.2 + 2.0 * gap;
     return { zTop, zPore, zBot, yTop: zTop, yPore: zPore, yBot: zBot };
   }
 }
@@ -430,9 +455,25 @@ function setDaemonExplodeGap(gap) {
   // 1. Instantly update all part mesh positions in 3D scene (60 FPS smooth!)
   if (daemonPoreGroup) {
     daemonPoreGroup.children.forEach(child => {
-      if (child.userData && child.userData.base_z !== undefined) {
-        const l = (child.userData.layer !== undefined) ? child.userData.layer : 0;
-        child.position.z = child.userData.base_z + l * daemonExplodeGap;
+      if (child.userData) {
+        const slideDir = child.userData.slide_dir || "z";
+        const factor = (child.userData.slide_factor !== undefined) ? child.userData.slide_factor : ((child.userData.layer !== undefined) ? child.userData.layer : 0);
+        if (slideDir === "x") {
+          // Mold Halves: Slide apart laterally along parting plane (X-axis)
+          child.position.x = (child.userData.base_x || 0) + factor * daemonExplodeGap;
+          child.position.y = (child.userData.base_y || 0);
+          child.position.z = (child.userData.base_z || 0);
+        } else if (slideDir === "none") {
+          // Mold Cavity Gasket / Silicon Wafer: Stay stationary at parting center
+          child.position.x = (child.userData.base_x || 0);
+          child.position.y = (child.userData.base_y || 0);
+          child.position.z = (child.userData.base_z || 0);
+        } else {
+          // Default Stackup: Explode vertically along Z-axis
+          child.position.x = (child.userData.base_x || 0);
+          child.position.y = (child.userData.base_y || 0);
+          child.position.z = (child.userData.base_z || 0) + factor * daemonExplodeGap;
+        }
       }
     });
 
@@ -441,9 +482,15 @@ function setDaemonExplodeGap(gap) {
     if (oldCircuit) {
       daemonPoreGroup.remove(oldCircuit);
     }
-    const heights = getDaemonChannelHeights(daemonGeometryMode, daemonExplodeGap);
-    if (heights) {
-      addDaemonFluidicCircuit(heights);
+    if (daemonGeometryMode === "mold") {
+      if (daemonAssemblyManifest && daemonAssemblyManifest.mold_cavity) {
+        addDaemonMoldCircuit(daemonAssemblyManifest.mold_cavity);
+      }
+    } else {
+      const heights = getDaemonChannelHeights(daemonGeometryMode, daemonExplodeGap);
+      if (heights) {
+        addDaemonFluidicCircuit(heights);
+      }
     }
   }
 
@@ -476,20 +523,8 @@ function addDaemonFluidicCircuit(heights) {
   const circuitGroup = new THREE.Group();
   circuitGroup.name = "fluidicCircuitGroup";
 
-  // 1. Nanopore Silicon Chip Carrier (4x4mm) at (0, 0, zPore)
-  const chipGeom = new THREE.BoxGeometry(4.0, 4.0, 0.35);
-  const chipMat = new THREE.MeshStandardMaterial({
-    color: 0xd97706,
-    metalness: 0.85,
-    roughness: 0.25,
-    wireframe: wireframeMode
-  });
-  const chipMesh = new THREE.Mesh(chipGeom, chipMat);
-  chipMesh.position.set(0, 0, heights.zPore);
-  circuitGroup.add(chipMesh);
-
-  // 2. Nanopore Holographic Sensor Aperture
-  const poreRingGeom = new THREE.RingGeometry(0.2, 0.95, 32);
+  // 1. Nanopore Holographic Sensor Aperture (aligned with 0.5mm central wafer membrane window)
+  const poreRingGeom = new THREE.RingGeometry(0.18, 0.35, 32);
   const poreRingMat = new THREE.MeshBasicMaterial({
     color: 0xec4899,
     side: THREE.DoubleSide,
@@ -497,12 +532,12 @@ function addDaemonFluidicCircuit(heights) {
     opacity: 0.95
   });
   const poreRing = new THREE.Mesh(poreRingGeom, poreRingMat);
-  poreRing.position.set(0, 0, heights.zPore + 0.18);
+  poreRing.position.set(0, 0, heights.zPore + 0.05);
   circuitGroup.add(poreRing);
 
-  // Translocation Capillary Core (linking zTop to zBot at 0, 0)
+  // 2. Translocation Capillary Core (linking zTop to zBot at 0, 0 through the nanopore)
   const span = Math.max(1.0, Math.abs(heights.zTop - heights.zBot));
-  const capGeom = new THREE.CylinderGeometry(0.4, 0.4, span, 16);
+  const capGeom = new THREE.CylinderGeometry(0.2, 0.2, span, 16);
   capGeom.rotateX(Math.PI / 2);
   const capMat = new THREE.MeshBasicMaterial({
     color: 0xec4899,
@@ -564,6 +599,127 @@ function addDaemonFluidicCircuit(heights) {
   daemonPoreGroup.add(circuitGroup);
 }
 
+function addDaemonMoldCircuit(cavityData) {
+  if (!cavityData) return;
+  const circuitGroup = new THREE.Group();
+  circuitGroup.name = "fluidicCircuitGroup";
+
+  // Coordinates inside daemonPoreGroup are in CAD coordinates:
+  // Parting plane: X = 0
+  // Cavity center: X = 0, Y = 0, Z = 35.0
+  // Hexagon in YZ plane:
+  const hexPts = [
+    new THREE.Vector3(0, 0, 65.0),
+    new THREE.Vector3(0, 25.981, 50.0),
+    new THREE.Vector3(0, 25.981, 20.0),
+    new THREE.Vector3(0, 0, 5.0),
+    new THREE.Vector3(0, -25.981, 20.0),
+    new THREE.Vector3(0, -25.981, 50.0),
+    new THREE.Vector3(0, 0, 65.0)
+  ];
+  const hexGeom = new THREE.BufferGeometry().setFromPoints(hexPts);
+  const hexMat = new THREE.LineBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.90,
+    linewidth: 2
+  });
+  circuitGroup.add(new THREE.Line(hexGeom, hexMat));
+
+  // Silicon Wafer Seat (4x4mm rotated 45 deg, center Z=35.0, Y=0, X=-1.2)
+  const halfDiagWafer = 2.0 * Math.SQRT2; // ~2.828 mm
+  const waferPts = [
+    new THREE.Vector3(-1.2, 0, 35.0 + halfDiagWafer),
+    new THREE.Vector3(-1.2, halfDiagWafer, 35.0),
+    new THREE.Vector3(-1.2, 0, 35.0 - halfDiagWafer),
+    new THREE.Vector3(-1.2, -halfDiagWafer, 35.0),
+    new THREE.Vector3(-1.2, 0, 35.0 + halfDiagWafer)
+  ];
+  const waferGeom = new THREE.BufferGeometry().setFromPoints(waferPts);
+  const waferMat = new THREE.LineBasicMaterial({
+    color: 0xf43f5e,
+    transparent: true,
+    opacity: 0.95,
+    linewidth: 2
+  });
+  circuitGroup.add(new THREE.Line(waferGeom, waferMat));
+
+  // Diamond Protrusion Pocket (6x6mm rotated 45 deg, center Z=35.0, Y=0, X=-0.8 to -1.6)
+  const halfDiagDiamond = 3.0 * Math.SQRT2; // ~4.243 mm
+  const diamondPts = [
+    new THREE.Vector3(-0.8, 0, 35.0 + halfDiagDiamond),
+    new THREE.Vector3(-0.8, halfDiagDiamond, 35.0),
+    new THREE.Vector3(-0.8, 0, 35.0 - halfDiagDiamond),
+    new THREE.Vector3(-0.8, -halfDiagDiamond, 35.0),
+    new THREE.Vector3(-0.8, 0, 35.0 + halfDiagDiamond)
+  ];
+  const diamondGeom = new THREE.BufferGeometry().setFromPoints(diamondPts);
+  const diamondMat = new THREE.LineBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.85,
+    linewidth: 2
+  });
+  circuitGroup.add(new THREE.Line(diamondGeom, diamondMat));
+
+  // Central Nanopore Aperture Ring (facing parting plane along X axis)
+  const poreRingGeom = new THREE.RingGeometry(0.2, 0.45, 32);
+  const poreRingMat = new THREE.MeshBasicMaterial({
+    color: 0xec4899,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.95
+  });
+  const poreRing = new THREE.Mesh(poreRingGeom, poreRingMat);
+  poreRing.rotation.y = Math.PI / 2;
+  poreRing.position.set(-1.2, 0, 35.0);
+  circuitGroup.add(poreRing);
+
+  // Sprue Channel Runner (Z from 75 to 61 at X=0, Y=0)
+  const spruePts = [
+    new THREE.Vector3(0, 0, 75.0),
+    new THREE.Vector3(0, 0, 61.0)
+  ];
+  const sprueGeom = new THREE.BufferGeometry().setFromPoints(spruePts);
+  const sprueMat = new THREE.LineBasicMaterial({
+    color: 0xf59e0b,
+    transparent: true,
+    opacity: 0.85,
+    linewidth: 2
+  });
+  circuitGroup.add(new THREE.Line(sprueGeom, sprueMat));
+
+  // Air Bleed Vents / Risers (Y = +/- 15.0, Z from 61 to 90)
+  for (const yVent of [15.0, -15.0]) {
+    const ventPts = [
+      new THREE.Vector3(0, yVent, 61.0),
+      new THREE.Vector3(0, yVent, 90.0)
+    ];
+    const ventGeom = new THREE.BufferGeometry().setFromPoints(ventPts);
+    const ventMat = new THREE.LineBasicMaterial({
+      color: 0x10b981,
+      transparent: true,
+      opacity: 0.80,
+      linewidth: 1
+    });
+    circuitGroup.add(new THREE.Line(ventGeom, ventMat));
+  }
+
+  // Top Reservoir Box Wireframe: centered at (0, 0, 82.5), size (12.0, 50.0, 15.0)
+  const resBoxGeom = new THREE.BoxGeometry(12.0, 50.0, 15.0);
+  const resWireGeom = new THREE.EdgesGeometry(resBoxGeom);
+  const resMat = new THREE.LineBasicMaterial({
+    color: 0x64748b,
+    transparent: true,
+    opacity: 0.5
+  });
+  const resWire = new THREE.LineSegments(resWireGeom, resMat);
+  resWire.position.set(0, 0, 82.5);
+  circuitGroup.add(resWire);
+
+  daemonPoreGroup.add(circuitGroup);
+}
+
 async function loadDaemonPoreGeometry(mode = "cartridge") {
   if (!daemonPoreGroup) return;
 
@@ -592,6 +748,11 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
     modeDropdown.style.display = (currentProjectId === "daemon-pore" && currentDomain !== "pcb") ? "inline-block" : "none";
   }
 
+  const btnReloadCad = document.getElementById("btn-reload-cad");
+  if (btnReloadCad) {
+    btnReloadCad.style.display = (currentProjectId === "daemon-pore" && currentDomain !== "pcb") ? "inline-block" : "none";
+  }
+
   const explodeContainer = document.getElementById("daemon-explode-container");
   if (explodeContainer) {
     explodeContainer.style.display = (currentProjectId === "daemon-pore" && currentDomain !== "pcb") ? "inline-flex" : "none";
@@ -601,7 +762,7 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
     if (quickVal) quickVal.innerText = `${daemonExplodeGap.toFixed(1)}mm`;
   }
 
-  function addMeshWithEdges(geom, colorHex, opacity = 1.0, zPos = 0, isTransparent = false, metalness = 0.3, roughness = 0.4, userData = {}) {
+  function addMeshWithEdges(geom, colorHex, opacity = 1.0, zPos = 0, isTransparent = false, metalness = 0.3, roughness = 0.4, userData = {}, xPos = 0, yPos = 0) {
     if (!geom) return null;
     const mat = new THREE.MeshStandardMaterial({
       color: colorHex,
@@ -613,7 +774,7 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
       side: THREE.DoubleSide
     });
     const mesh = new THREE.Mesh(geom, mat);
-    mesh.position.set(0, 0, zPos);
+    mesh.position.set(xPos, yPos, zPos);
     mesh.userData = userData;
 
     // Glowing edge outline
@@ -635,7 +796,7 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
 
   // 1. Fetch live parametric assembly manifest directly from build123d engine
   try {
-    const res = await fetch(`/api/project/build123d_assembly?project_id=daemon-pore&mode=${mode}&explode=${daemonExplodeGap}`);
+    const res = await fetch(`/api/project/build123d_assembly?project_id=daemon-pore&mode=${mode}&explode=${daemonExplodeGap}&_t=${Date.now()}`);
     if (res.ok) {
       const manifest = await res.json();
       daemonAssemblyManifest = manifest;
@@ -650,17 +811,30 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
             geom,
             colorHex,
             part.opacity !== undefined ? part.opacity : 1.0,
-            part.z_pos,
+            part.z_pos || 0,
             !!part.transparent,
             part.metalness !== undefined ? part.metalness : 0.3,
             part.roughness !== undefined ? part.roughness : 0.4,
-            { partId: part.id, name: part.name, layer: part.layer, base_z: part.base_z }
+            {
+              partId: part.id,
+              name: part.name,
+              layer: part.layer,
+              base_x: part.base_x !== undefined ? part.base_x : 0,
+              base_y: part.base_y !== undefined ? part.base_y : 0,
+              base_z: part.base_z !== undefined ? part.base_z : (part.z_pos || 0),
+              slide_dir: part.slide_dir || "z",
+              slide_factor: part.slide_factor !== undefined ? part.slide_factor : (part.layer !== undefined ? part.layer : 1.0)
+            },
+            part.x_pos || 0,
+            part.y_pos || 0
           );
         }
 
-        // Add dynamically positioned holographic fluidic circuit
+        // Add dynamically positioned holographic fluidic or mold circuit
         if (manifest.fluidic_heights) {
           addDaemonFluidicCircuit(manifest.fluidic_heights);
+        } else if (manifest.mold_cavity) {
+          addDaemonMoldCircuit(manifest.mold_cavity);
         }
 
         // Smooth camera framing
@@ -675,14 +849,14 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
             camera.position.set(0, 95, 120);
             controls.target.set(0, 25, 0);
           } else if (mode === "system") {
-            camera.position.set(0, 130, 170);
-            controls.target.set(0, -10, 0);
+            camera.position.set(-30, 150, 240);
+            controls.target.set(-40, 10, 0);
           } else if (mode === "mold") {
-            camera.position.set(0, 65, 85);
-            controls.target.set(0, 5, 0);
+            camera.position.set(0, 50, 140);
+            controls.target.set(0, 45, 0);
           } else if (mode === "pump") {
-            camera.position.set(0, 75, 80);
-            controls.target.set(0, 10, 0);
+            camera.position.set(0, 100, 120);
+            controls.target.set(0, 30, 0);
           }
           controls.update();
         }
@@ -724,6 +898,7 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
 
 function switchDaemonGeometryMode(mode) {
   daemonGeometryMode = mode;
+  buildDaemonPoreSliders();
   loadDaemonPoreGeometry(mode);
   const modeNames = {
     cartridge: "🔬 Build123d Cartridge Stack",
@@ -738,17 +913,27 @@ function switchDaemonGeometryMode(mode) {
   showKiCadToast(`Loaded: ${modeNames[mode] || mode}`, 2500);
 }
 
+async function reloadDaemonCadGeometry() {
+  daemonCadCache = {};
+  showKiCadToast("🔄 Refreshing Build123d CAD models & stackup...", 2000);
+  await loadDaemonPoreGeometry(daemonGeometryMode);
+  showKiCadToast("✅ CAD Models reloaded successfully!", 2500);
+}
+
 function buildDaemonPoreSliders() {
   const container = document.getElementById("sliders-container");
   if (!container) return;
   container.innerHTML = "";
 
+  const isMold = (daemonGeometryMode === "mold");
+  const defs = isMold ? DAEMON_MOLD_PARAM_DEFS : DAEMON_PORE_PARAM_DEFS;
+
   const panelHeader = document.querySelector("#cfd-panel .section-header");
   if (panelHeader) {
-    panelHeader.innerText = "Nanopore & Microfluidic Controls";
+    panelHeader.innerText = isMold ? "PDMS Mold & Injection Controls" : "Nanopore & Microfluidic Controls";
   }
 
-  for (const [pName, defn] of Object.entries(DAEMON_PORE_PARAM_DEFS)) {
+  for (const [pName, defn] of Object.entries(defs)) {
     if (currentParams[pName] === undefined) {
       currentParams[pName] = defn.default;
     }
@@ -786,7 +971,11 @@ function buildDaemonPoreSliders() {
       if (pName === "explode_gap_mm") {
         setDaemonExplodeGap(v);
       }
-      updateDaemonPoreTelemetry();
+      if (isMold) {
+        updateDaemonMoldTelemetry();
+      } else {
+        updateDaemonPoreTelemetry();
+      }
     });
 
     group.appendChild(labelRow);
@@ -794,11 +983,229 @@ function buildDaemonPoreSliders() {
     container.appendChild(group);
   }
 
-  updateDaemonPoreTelemetry();
+  if (isMold) {
+    const btnGroup = document.createElement("div");
+    btnGroup.style.display = "flex";
+    btnGroup.style.gap = "8px";
+    btnGroup.style.marginTop = "12px";
+
+    const runBtn = document.createElement("button");
+    runBtn.id = "btn-run-injection";
+    runBtn.className = "kicad-btn primary";
+    runBtn.style.flex = "1";
+    runBtn.innerText = isMoldFilling ? "⏸ Pause Injection" : "▶ Run Injection Fill";
+    runBtn.onclick = () => toggleMoldFillAnimation();
+    btnGroup.appendChild(runBtn);
+
+    const resetBtn = document.createElement("button");
+    resetBtn.className = "kicad-btn";
+    resetBtn.innerText = "↺ Empty";
+    resetBtn.onclick = () => resetMoldFill();
+    btnGroup.appendChild(resetBtn);
+
+    container.appendChild(btnGroup);
+    updateDaemonMoldTelemetry();
+  } else {
+    updateDaemonPoreTelemetry();
+  }
+}
+
+function toggleMoldFillAnimation() {
+  if (isMoldFilling) {
+    isMoldFilling = false;
+    if (moldFillAnimationId) cancelAnimationFrame(moldFillAnimationId);
+    moldFillAnimationId = null;
+    const btn = document.getElementById("btn-run-injection");
+    if (btn) btn.innerText = "▶ Resume Injection";
+  } else {
+    isMoldFilling = true;
+    const btn = document.getElementById("btn-run-injection");
+    if (btn) btn.innerText = "⏸ Pause Injection";
+    if (currentParams.fill_progress_pct >= 100.0) {
+      currentParams.fill_progress_pct = 0.0;
+    }
+    let lastTime = performance.now();
+    function stepFill(now) {
+      if (!isMoldFilling) return;
+      const dt = (now - lastTime) / 1000.0;
+      lastTime = now;
+
+      const p_inj = parseFloat(currentParams.injection_pressure_psi || 3.5);
+      const flowRate = parseFloat(currentParams.flow_rate_ml_min || 5.0);
+      const mu = parseFloat(currentParams.pdms_viscosity_pas || 3.5);
+      const dp_req = ((8.0 * mu * 0.025 * (flowRate * 1e-6 / 60)) / (Math.PI * 16e-12) + (12.0 * mu * 0.052 * (flowRate * 1e-6 / 60)) / (0.045 * 4.096e-9) + 1200.0) / 6894.76;
+      const maxFill = p_inj >= dp_req ? 100.0 : Math.max(20.0, (p_inj / dp_req) * 100.0);
+
+      // Advance fill at rate proportional to flow rate (preview speed ~25%/s)
+      const fillRate = (flowRate / 5.2) * 100.0 * 0.4;
+      currentParams.fill_progress_pct = Math.min(maxFill, (currentParams.fill_progress_pct || 0) + fillRate * dt);
+
+      const slider = document.getElementById("slider-fill_progress_pct");
+      if (slider) slider.value = currentParams.fill_progress_pct;
+      const valDisp = document.getElementById("val-fill_progress_pct");
+      if (valDisp) valDisp.innerText = `${currentParams.fill_progress_pct.toFixed(0)} %`;
+
+      updateDaemonMoldTelemetry();
+
+      if (currentParams.fill_progress_pct >= maxFill) {
+        isMoldFilling = false;
+        if (btn) btn.innerText = "▶ Run Injection Fill";
+        return;
+      }
+      moldFillAnimationId = requestAnimationFrame(stepFill);
+    }
+    moldFillAnimationId = requestAnimationFrame(stepFill);
+  }
+}
+
+function resetMoldFill() {
+  if (moldFillAnimationId) cancelAnimationFrame(moldFillAnimationId);
+  moldFillAnimationId = null;
+  isMoldFilling = false;
+  currentParams.fill_progress_pct = 0.0;
+  const slider = document.getElementById("slider-fill_progress_pct");
+  if (slider) slider.value = 0;
+  const valDisp = document.getElementById("val-fill_progress_pct");
+  if (valDisp) valDisp.innerText = "0 %";
+  const btn = document.getElementById("btn-run-injection");
+  if (btn) btn.innerText = "▶ Run Injection Fill";
+  updateDaemonMoldTelemetry();
+}
+
+function updateDaemonMoldTelemetry() {
+  if (currentDomain === "pcb") return;
+
+  const p_inj_psi = parseFloat(currentParams.injection_pressure_psi || 3.5);
+  const flow_rate_ml_min = parseFloat(currentParams.flow_rate_ml_min || 5.0);
+  const pdms_mu = parseFloat(currentParams.pdms_viscosity_pas || 3.5);
+  const mold_temp_c = parseFloat(currentParams.mold_temp_c || 25.0);
+  const fill_progress_pct = parseFloat(currentParams.fill_progress_pct !== undefined ? currentParams.fill_progress_pct : 100.0);
+
+  // 1. Temperature-adjusted PDMS Viscosity (Arrhenius relation)
+  const effective_mu = pdms_mu * Math.exp(2000.0 * (1.0 / (mold_temp_c + 273.15) - 1.0 / 298.15));
+  const Q_m3s = (flow_rate_ml_min * 1e-6) / 60.0;
+
+  // 2. Pressure Drop Components
+  // Sprue: Hagen-Poiseuille through tapered channel (L=25mm, r_eff=2.0mm)
+  const dp_sprue_Pa = (8.0 * effective_mu * 0.025 * Q_m3s) / (Math.PI * Math.pow(0.002, 4));
+  // Hexagonal Gasket Cavity: Hele-Shaw flow for thin gap (h = 1.6mm, W_eff = 45mm, L = 52mm)
+  const dp_cavity_Pa = (12.0 * effective_mu * 0.052 * Q_m3s) / (0.045 * Math.pow(0.0016, 3));
+  // Silicon Wafer die obstruction & alignment pin constriction
+  const dp_wafer_Pa = 1200.0 * (effective_mu / 3.5) * Math.sqrt(Math.max(0.1, flow_rate_ml_min / 5.0)) + 350.0;
+  const dp_req_Pa = dp_sprue_Pa + dp_cavity_Pa + dp_wafer_Pa;
+  const dp_req_psi = dp_req_Pa / 6894.76;
+
+  // 3. Fill Feasibility & Short-Shot Ratio
+  const fill_ratio = p_inj_psi / Math.max(0.05, dp_req_psi);
+  const maxAchievableFillPct = fill_ratio >= 1.0 ? 100.0 : Math.max(20.0, fill_ratio * 100.0);
+  const effective_fill_pct = Math.min(fill_progress_pct, maxAchievableFillPct);
+  const isFullFill = fill_ratio >= 1.0;
+
+  // 4. Fill Time
+  const v_cavity_ml = 5.2; // total mold volume in mL
+  const fill_time_s = (v_cavity_ml / Math.max(0.1, flow_rate_ml_min)) * 60.0;
+
+  // 5. Front Velocity in Cavity
+  const area_cavity_m2 = 0.045 * 0.0016;
+  const v_avg_ms = Q_m3s / area_cavity_m2;
+  const front_vel_mms = v_avg_ms * 1e3;
+
+  // 6. Mold Clamping Safety Factor vs Parting Flash
+  const p_applied_Pa = p_inj_psi * 6894.76;
+  const a_proj_m2 = 0.0028; // ~28 cm2 projected parting area
+  const f_sep_N = p_applied_Pa * a_proj_m2;
+  const f_clamp_N = 1200.0; // 4x M4 torque screws (1.2 kN clamp force)
+  const clamping_sf = f_clamp_N / Math.max(1.0, f_sep_N);
+  const isFlashSafe = clamping_sf >= 1.2;
+
+  // Update Telemetry Cards
+  const cardEff = document.getElementById("card-eff");
+  if (cardEff) {
+    const title = cardEff.querySelector(".metric-title");
+    if (title) title.innerText = "REQUIRED INJ. PRESSURE";
+    const val = document.getElementById("metric-eff");
+    if (val) val.innerText = `${dp_req_psi.toFixed(2)} PSI`;
+    const sub = document.getElementById("sub-eff");
+    if (sub) {
+      sub.innerHTML = isFullFill
+        ? `<span class="badge-status-dot admissible"></span> Full Fill Feasible (ΔP_req ≤ P_inj)`
+        : `<span class="badge-status-dot unverified"></span> Short-Shot Risk (Need ≥ ${dp_req_psi.toFixed(1)} PSI)`;
+    }
+    cardEff.style.borderColor = isFullFill ? "var(--accent-emerald)" : "var(--accent-amber)";
+  }
+
+  const cardDp = document.getElementById("card-dp");
+  if (cardDp) {
+    const title = cardDp.querySelector(".metric-title");
+    if (title) title.innerText = "APPLIED INJ. PRESSURE";
+    const val = document.getElementById("metric-dp");
+    if (val) val.innerText = `${p_inj_psi.toFixed(2)} PSI`;
+    const sub = document.getElementById("sub-dp");
+    if (sub) sub.innerText = `${Math.round(p_applied_Pa)} Pa (Syringe / Pump)`;
+    cardDp.style.borderColor = isFullFill ? "var(--accent-emerald)" : "var(--accent-amber)";
+  }
+
+  const cardCons = document.getElementById("card-conservation");
+  if (cardCons) {
+    const title = cardCons.querySelector(".metric-title");
+    if (title) title.innerText = "EST. CAVITY FILL TIME";
+    const val = document.getElementById("metric-div");
+    if (val) val.innerText = `${fill_time_s.toFixed(1)} s`;
+    const sub = document.getElementById("sub-div");
+    if (sub) sub.innerText = `Vol: 5.2 mL @ ${flow_rate_ml_min.toFixed(1)} mL/min`;
+  }
+
+  const cardStress = document.getElementById("card-stress");
+  if (cardStress) {
+    const title = cardStress.querySelector(".metric-title");
+    if (title) title.innerText = "RESIN FRONT VELOCITY";
+    const val = document.getElementById("metric-stress");
+    if (val) val.innerText = `${front_vel_mms.toFixed(1)} mm/s`;
+    const sub = document.getElementById("sub-stress");
+    if (sub) sub.innerText = `PDMS Viscosity: ${effective_mu.toFixed(2)} Pa·s (@${mold_temp_c.toFixed(0)}°C)`;
+  }
+
+  const cardFos = document.getElementById("card-fos");
+  if (cardFos) {
+    const title = cardFos.querySelector(".metric-title");
+    if (title) title.innerText = "MOLD CLAMPING SAFETY";
+    const val = document.getElementById("metric-fos");
+    if (val) val.innerText = `SF: ${clamping_sf.toFixed(1)}x`;
+    const sub = document.getElementById("sub-fos");
+    if (sub) {
+      sub.innerHTML = isFlashSafe
+        ? `<span class="badge-status-dot admissible"></span> Parting Sealed (Zero Flash)`
+        : `<span class="badge-status-dot unverified"></span> Flash Warning (F_sep > F_clamp)`;
+    }
+    cardFos.style.borderColor = isFlashSafe ? "var(--accent-emerald)" : "var(--accent-amber)";
+  }
+
+  const cardUnc = document.getElementById("card-unc");
+  if (cardUnc) {
+    const title = cardUnc.querySelector(".metric-title");
+    if (title) title.innerText = "CAVITY FILL COMPLETION";
+    const val = document.getElementById("metric-unc");
+    if (val) val.innerText = `${effective_fill_pct.toFixed(1)}%`;
+    const subUnc = cardUnc.querySelector(".metric-sub");
+    if (subUnc) {
+      subUnc.innerText = effective_fill_pct >= 99.9
+        ? "Wafer Fully Encapsulated (No Voids)"
+        : (isFullFill ? "Filling In Progress..." : `Short Shot Stalled at ${effective_fill_pct.toFixed(1)}%`);
+    }
+  }
+
+  const backendStatus = document.getElementById("backend-status");
+  if (backendStatus) {
+    backendStatus.innerText = "PDMS Injection Rheology (Hele-Shaw)";
+  }
 }
 
 function updateDaemonPoreTelemetry() {
   if (currentDomain === "pcb") return;
+  if (daemonGeometryMode === "mold") {
+    updateDaemonMoldTelemetry();
+    return;
+  }
 
   const dp_nm = parseFloat(currentParams.pore_diameter_nm || 4.0);
   const v_bias_mv = parseFloat(currentParams.bias_voltage_mv || 120.0);
@@ -1030,8 +1437,256 @@ function updateSingleDaemonParticle(i, heights) {
   particlePositions[idx + 2] = z_world;
 }
 
+function resetSingleMoldParticle(i, initial = false) {
+  const fillPct = (currentParams.fill_progress_pct !== undefined) ? currentParams.fill_progress_pct : 100.0;
+  moldParticleTrack[i] = (Math.random() - 0.5) * 2.0;
+  moldParticleTrackX[i] = (Math.random() - 0.5) * 2.0;
+  moldParticleSpeed[i] = 0.85 + Math.random() * 0.35;
+
+  if (initial) {
+    const r = Math.random() * Math.max(10.0, fillPct);
+    if (r < 20) {
+      moldParticleStage[i] = 0;
+      moldParticleY[i] = 75.0 + Math.random() * 14.0;
+      moldParticleZ[i] = (Math.random() - 0.5) * 45.0 * ((moldParticleY[i] - 75.0) / 14.0);
+      moldParticleX[i] = (Math.random() - 0.5) * 2.0;
+    } else if (r < 30) {
+      moldParticleStage[i] = 1;
+      moldParticleY[i] = 61.0 + Math.random() * 14.0;
+      const rad = 1.5 + 1.5 * ((moldParticleY[i] - 61.0) / 14.0);
+      moldParticleZ[i] = moldParticleTrack[i] * rad * 0.65;
+      moldParticleX[i] = moldParticleTrackX[i] * rad * 0.65;
+    } else if (r < 60) {
+      moldParticleStage[i] = 2;
+      moldParticleY[i] = 39.24 + Math.random() * 21.76;
+      const w = 25.981 * Math.min(1.0, (65.0 - moldParticleY[i]) / 15.0);
+      moldParticleZ[i] = moldParticleTrack[i] * Math.max(1.0, w) * 0.92;
+      moldParticleX[i] = moldParticleTrackX[i] * 0.65;
+    } else if (r < 70) {
+      moldParticleStage[i] = 3;
+      moldParticleY[i] = 30.76 + Math.random() * 8.48;
+      const side = moldParticleTrack[i] >= 0 ? 1 : -1;
+      const dObstacle = Math.max(0, 4.243 * (1.0 - Math.abs(moldParticleY[i] - 35.0) / 4.243));
+      moldParticleZ[i] = side * (dObstacle + 0.45 + Math.abs(moldParticleTrack[i]) * 1.2);
+      moldParticleX[i] = moldParticleTrackX[i] * 0.65;
+    } else if (r < 90) {
+      moldParticleStage[i] = 4;
+      moldParticleY[i] = 7.5 + Math.random() * 23.26;
+      const w = 25.981 * Math.max(0.05, (moldParticleY[i] - 5.0) / 15.0);
+      moldParticleZ[i] = moldParticleTrack[i] * Math.min(25.981, w) * 0.92;
+      moldParticleX[i] = moldParticleTrackX[i] * 0.65;
+    } else {
+      moldParticleStage[i] = 5;
+      moldParticleY[i] = 61.0 + Math.random() * 28.0;
+      const side = moldParticleTrack[i] >= 0 ? 15.0 : -15.0;
+      moldParticleZ[i] = side + moldParticleTrackX[i] * 0.4;
+      moldParticleX[i] = moldParticleTrackX[i] * 0.4;
+    }
+  } else {
+    moldParticleStage[i] = 0;
+    moldParticleY[i] = 88.0 + Math.random() * 1.5;
+    moldParticleZ[i] = (Math.random() - 0.5) * 40.0;
+    moldParticleX[i] = (Math.random() - 0.5) * 2.2;
+  }
+
+  const idx = i * 3;
+  particlePositions[idx]     = moldParticleX[i];
+  particlePositions[idx + 1] = moldParticleY[i];
+  particlePositions[idx + 2] = -moldParticleZ[i];
+}
+
+function updateMoldParticles(dt) {
+  if (!particleSystem || !particlePositions) return;
+  const posAttr = particleSystem.geometry.attributes.position;
+  const colAttr = particleSystem.geometry.attributes.color;
+
+  const p_inj_psi = parseFloat(currentParams.injection_pressure_psi || 3.5);
+  const flow_rate_ml_min = parseFloat(currentParams.flow_rate_ml_min || 5.0);
+  const pdms_mu = parseFloat(currentParams.pdms_viscosity_pas || 3.5);
+  const mold_temp_c = parseFloat(currentParams.mold_temp_c || 25.0);
+  const fill_progress_pct = parseFloat(currentParams.fill_progress_pct !== undefined ? currentParams.fill_progress_pct : 100.0);
+
+  // Viscosity temperature dependence
+  const effective_mu = pdms_mu * Math.exp(2000.0 * (1.0 / (mold_temp_c + 273.15) - 1.0 / 298.15));
+  const Q_m3s = (flow_rate_ml_min * 1e-6) / 60.0;
+
+  // Resistance calculations
+  const dp_sprue_Pa = (8.0 * effective_mu * 0.025 * Q_m3s) / (Math.PI * Math.pow(0.002, 4));
+  const dp_cavity_Pa = (12.0 * effective_mu * 0.052 * Q_m3s) / (0.045 * Math.pow(0.0016, 3));
+  const dp_wafer_Pa = 1200.0 * (effective_mu / 3.5) * Math.sqrt(Math.max(0.1, flow_rate_ml_min / 5.0)) + 350.0;
+  const dp_req_Pa = dp_sprue_Pa + dp_cavity_Pa + dp_wafer_Pa;
+  const dp_req_psi = dp_req_Pa / 6894.76;
+
+  // Max achievable fill (short shot condition)
+  const fill_ratio = p_inj_psi / Math.max(0.05, dp_req_psi);
+  const maxAchievableFillPct = fill_ratio >= 1.0 ? 100.0 : Math.max(20.0, fill_ratio * 100.0);
+  const effective_fill_pct = Math.min(fill_progress_pct, maxAchievableFillPct);
+
+  // Speed scale
+  const baseFlowVel = Math.min(75.0, Math.max(8.0, flow_rate_ml_min * 3.8));
+
+  // Determine current front elevation boundary:
+  let y_front = 7.5;
+  let maxStageAllowed = 5;
+  if (effective_fill_pct < 20.0) {
+    maxStageAllowed = 0;
+    y_front = 89.0 - (14.0 * (effective_fill_pct / 20.0));
+  } else if (effective_fill_pct < 30.0) {
+    maxStageAllowed = 1;
+    y_front = 75.0 - (14.0 * ((effective_fill_pct - 20.0) / 10.0));
+  } else if (effective_fill_pct < 90.0) {
+    maxStageAllowed = 4;
+    y_front = 61.0 - (53.5 * ((effective_fill_pct - 30.0) / 60.0));
+  } else {
+    maxStageAllowed = 5;
+    y_front = 61.0 + (28.0 * ((effective_fill_pct - 90.0) / 10.0)); // vent climb
+  }
+
+  for (let i = 0; i < N_PARTICLES; i++) {
+    let stage = moldParticleStage[i];
+    let y = moldParticleY[i];
+    let z = moldParticleZ[i];
+    let x = moldParticleX[i];
+    const track = moldParticleTrack[i];
+    const trackX = moldParticleTrackX[i];
+    const spd = moldParticleSpeed[i];
+
+    // Advance position along stage
+    if (stage === 0) {
+      // Reservoir: downward funneling
+      y -= baseFlowVel * 0.55 * spd * dt;
+      z *= (1.0 - 0.02 * baseFlowVel * dt);
+      x *= (1.0 - 0.02 * baseFlowVel * dt);
+      if (y <= 75.0) {
+        stage = 1;
+        y = 75.0;
+      }
+    } else if (stage === 1) {
+      // Sprue: fast downward flow through tapered channel
+      y -= baseFlowVel * 2.2 * spd * dt;
+      const rad = 1.5 + 1.5 * Math.max(0.0, (y - 61.0) / 14.0);
+      z = track * rad * 0.65;
+      x = trackX * rad * 0.65;
+      if (y <= 61.0) {
+        stage = 2;
+        y = 61.0;
+      }
+    } else if (stage === 2) {
+      // Upper Hexagon
+      y -= baseFlowVel * 0.85 * spd * dt;
+      const w = 25.981 * Math.min(1.0, (65.0 - y) / 15.0);
+      z = track * Math.max(1.0, w) * 0.92;
+      x = trackX * 0.65;
+      if (y <= 39.24) {
+        if (Math.abs(track) < 0.35) {
+          stage = 3; // bypass wafer
+        } else {
+          stage = 4; // flank around wafer into lower hex
+        }
+      }
+    } else if (stage === 3) {
+      // Wafer Bypass: silicon diamond at center (Y=0 in CAD, Z=35.0 in CAD), halfDiag = 4.243mm
+      y -= baseFlowVel * 0.9 * spd * dt;
+      const dY = Math.abs(y - 35.0);
+      const side = track >= 0 ? 1 : -1;
+      const diamondObstacle = Math.max(0, 4.243 * (1.0 - dY / 4.243));
+      z = side * (diamondObstacle + 0.45 + Math.abs(track) * 1.2);
+      x = trackX * 0.65;
+      if (y <= 30.76) {
+        stage = 4;
+      }
+    } else if (stage === 4) {
+      // Lower Hexagon
+      y -= baseFlowVel * 0.75 * spd * dt;
+      const w = 25.981 * Math.max(0.05, (y - 5.0) / 15.0);
+      z = track * Math.min(25.981, w) * 0.92;
+      x = trackX * 0.65;
+      if (y <= 7.5) {
+        if (Math.random() < 0.45 && effective_fill_pct >= 85.0) {
+          stage = 5; // branch into air bleed vent
+          y = 61.0;
+          z = track >= 0 ? 15.0 : -15.0;
+        } else {
+          resetSingleMoldParticle(i, false);
+          stage = moldParticleStage[i];
+          y = moldParticleY[i];
+          z = moldParticleZ[i];
+          x = moldParticleX[i];
+        }
+      }
+    } else if (stage === 5) {
+      // Air Bleed Vents / Risers (upwards flow at Y = +/- 15 in CAD)
+      y += baseFlowVel * 1.4 * spd * dt;
+      z = (track >= 0 ? 15.0 : -15.0) + trackX * 0.35;
+      x = trackX * 0.35;
+      if (y >= 89.0) {
+        resetSingleMoldParticle(i, false);
+        stage = moldParticleStage[i];
+        y = moldParticleY[i];
+        z = moldParticleZ[i];
+        x = moldParticleX[i];
+      }
+    }
+
+    // Check fill front: if particle is beyond the fill front, clamp or hide
+    if (stage > maxStageAllowed) {
+      resetSingleMoldParticle(i, false);
+      stage = moldParticleStage[i];
+      y = moldParticleY[i];
+      z = moldParticleZ[i];
+      x = moldParticleX[i];
+    } else if (stage === maxStageAllowed) {
+      if (stage === 5) {
+        if (y > y_front) y = y_front; // climb up vent
+      } else {
+        if (y < y_front) y = y_front; // downward front
+      }
+    }
+
+    moldParticleStage[i] = stage;
+    moldParticleY[i] = y;
+    moldParticleZ[i] = z;
+    moldParticleX[i] = x;
+
+    const idx = i * 3;
+    particlePositions[idx]     = x;
+    particlePositions[idx + 1] = y;
+    particlePositions[idx + 2] = -z;
+
+    // Color: Rich Golden/Amber Liquid PDMS with stage highlights
+    if (stage === 3) {
+      // Flowing around silicon wafer: brilliant warm gold
+      colAttr.array[idx] = 1.0;
+      colAttr.array[idx + 1] = 0.82;
+      colAttr.array[idx + 2] = 0.25;
+    } else if (stage === 5) {
+      // Air bleed riser venting: cyan/teal degassing bubbles
+      colAttr.array[idx] = 0.22;
+      colAttr.array[idx + 1] = 0.88;
+      colAttr.array[idx + 2] = 0.95;
+    } else if (stage === 1) {
+      // High-shear sprue: bright electric amber
+      colAttr.array[idx] = 0.98;
+      colAttr.array[idx + 1] = 0.72;
+      colAttr.array[idx + 2] = 0.15;
+    } else {
+      // Standard liquid PDMS: warm amber honey
+      colAttr.array[idx] = 0.95;
+      colAttr.array[idx + 1] = 0.62;
+      colAttr.array[idx + 2] = 0.10;
+    }
+  }
+
+  posAttr.needsUpdate = true;
+  colAttr.needsUpdate = true;
+}
+
 function resetParticle(i, initial = false) {
   if (currentProjectId === "daemon-pore") {
+    if (daemonGeometryMode === "mold") {
+      resetSingleMoldParticle(i, initial);
+      return;
+    }
     const heights = getDaemonChannelHeights();
     const isTop = Math.random() < 0.55;
     daemonParticleChannel[i] = isTop ? 0 : 1;
@@ -1067,6 +1722,10 @@ function updateParticles(dt) {
   const colAttr = particleSystem.geometry.attributes.color;
 
   if (currentProjectId === "daemon-pore") {
+    if (daemonGeometryMode === "mold") {
+      updateMoldParticles(dt);
+      return;
+    }
     const heights = getDaemonChannelHeights();
     const qVal = parseFloat(currentParams.flow_rate_ul_min || 10.0);
     const baseFlowVel = Math.min(65.0, Math.max(5.0, qVal * 2.0));
@@ -1086,12 +1745,14 @@ function updateParticles(dt) {
         const vBias = parseFloat(currentParams.bias_voltage_mv || 120.0);
         const translocateVel = baseFlowVel * 1.6 * (vBias / 100.0);
         daemonParticleY[i] -= translocateVel * dt;
-        s += (Math.random() - 0.5) * 0.05 * dt;
+        daemonParticleLat[i] *= 0.82; // Electrophoretic funneling into central pore (0.5mm window)
+        daemonParticleS[i] *= 0.82;
 
         if (daemonParticleY[i] <= heights.yBot) {
           daemonParticleY[i] = heights.yBot;
           daemonParticleChannel[i] = 1; // joins bottom trans stream
-          daemonParticleS[i] = 0.5; // flows toward bottom outlet
+          daemonParticleS[i] = 0.2; // flows toward bottom outlet
+          daemonParticleLat[i] = (Math.random() - 0.5) * 0.2;
         }
       } else {
         s += u_flow * dt;
@@ -1731,9 +2392,10 @@ function toggleWireframe() {
 
   if (corkscrewMesh && corkscrewMesh.material) {
     if (Array.isArray(corkscrewMesh.material)) {
-      corkscrewMesh.material.forEach(m => m.wireframe = wireframeMode);
+      corkscrewMesh.material.forEach(m => { m.wireframe = wireframeMode; m.needsUpdate = true; });
     } else {
       corkscrewMesh.material.wireframe = wireframeMode;
+      corkscrewMesh.material.needsUpdate = true;
     }
   }
 
@@ -1741,9 +2403,10 @@ function toggleWireframe() {
     daemonPoreGroup.traverse(child => {
       if (child.isMesh && child.material) {
         if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.wireframe = wireframeMode);
+          child.material.forEach(m => { m.wireframe = wireframeMode; m.needsUpdate = true; });
         } else {
           child.material.wireframe = wireframeMode;
+          child.material.needsUpdate = true;
         }
       }
     });
@@ -1753,9 +2416,10 @@ function toggleWireframe() {
     pcbGroup.traverse(child => {
       if (child.isMesh && child.material) {
         if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.wireframe = wireframeMode);
+          child.material.forEach(m => { m.wireframe = wireframeMode; m.needsUpdate = true; });
         } else {
           child.material.wireframe = wireframeMode;
+          child.material.needsUpdate = true;
         }
       }
     });
@@ -2334,6 +2998,7 @@ async function switchProject(projectId) {
 
   // Toggle Daemon geometry dropdown and groups
   const modeDropdown = document.getElementById("daemon-geometry-mode");
+  const btnReloadCad = document.getElementById("btn-reload-cad");
   const explodeContainer = document.getElementById("daemon-explode-container");
   const btnElectrophys = document.getElementById("btn-toggle-electrophys");
   const btnExportFab = document.getElementById("btn-export-fab");
@@ -2341,6 +3006,7 @@ async function switchProject(projectId) {
 
   if (projectId === "daemon-pore") {
     if (modeDropdown && currentDomain !== "pcb") modeDropdown.style.display = "inline-block";
+    if (btnReloadCad && currentDomain !== "pcb") btnReloadCad.style.display = "inline-block";
     if (explodeContainer && currentDomain !== "pcb") explodeContainer.style.display = "inline-flex";
     if (btnElectrophys) btnElectrophys.style.display = "inline-block";
     if (btnExportFab && currentDomain !== "pcb") btnExportFab.style.display = "inline-block";
@@ -2353,6 +3019,7 @@ async function switchProject(projectId) {
     updateMicrofluidicFlowPhysics();
   } else {
     if (modeDropdown) modeDropdown.style.display = "none";
+    if (btnReloadCad) btnReloadCad.style.display = "none";
     if (explodeContainer) explodeContainer.style.display = "none";
     if (btnElectrophys) btnElectrophys.style.display = "none";
     if (btnExportFab) btnExportFab.style.display = "none";

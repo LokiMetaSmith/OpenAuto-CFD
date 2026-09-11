@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenAuto-CFD Studio — Multiphysics Engineering Suite</title>
-  <link rel="stylesheet" href="viewer.css">
+  <link rel="stylesheet" href="viewer.css?v=2.6.0">
   <!-- Three.js & OrbitControls -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -218,6 +218,7 @@
           <button class="tool-btn" onclick="resetCamera()">Reset</button>
           <button class="tool-btn" onclick="toggleParticles()">Streamlines</button>
           <button class="tool-btn" onclick="toggleWireframe()">Wireframe</button>
+          <button id="btn-reload-cad" class="tool-btn" onclick="reloadDaemonCadGeometry()" style="display: none; padding: 4px 8px; font-size: 11px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(0, 240, 255, 0.4); color: var(--accent-cyan);" title="Force refresh 3D CAD models from Build123d engine">🔄 Reload CAD</button>
           <select id="daemon-geometry-mode" class="tool-btn" style="display: none; padding: 4px 10px; font-size: 11px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(0, 240, 255, 0.4); color: var(--accent-cyan); font-weight: 600;" onchange="switchDaemonGeometryMode(this.value)">
             <option value="cartridge">🔬 Build123d Cartridge Stack</option>
             <option value="channels">🌊 Microfluidic Channels Core</option>
@@ -982,6 +983,6 @@
     </div>
   </div>
 
-  <script src="viewer.js"></script>
+  <script src="viewer.js?v=2.7.0"></script>
 </body>
 </html>

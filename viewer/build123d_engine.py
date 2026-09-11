@@ -7,6 +7,7 @@ and supports interactive parametric adjustments (explode factor, layer thickness
 
 import sys
 import os
+import math
 import time
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -31,7 +32,8 @@ try:
         PCB_Rigid_Active,
         Cast_Nanopore_Wafer_Gasket,
         Plate_3_Top_Hex,
-        Pressure_Puck
+        Pressure_Puck,
+        Nanopore_Wafer_Silicon
     )
     from src.housing import (
         Housing_Case_Reader,
@@ -48,6 +50,56 @@ except Exception as err:
     logger.warning("build123d or daemon-pore components not available: %s", err)
 
 
+def Peristaltic_Pump_Motor_Body():
+    """Diitao peristaltic pump motor cylinder body (h=38, d=27.6)."""
+    with BuildPart(mode=Mode.PRIVATE) as p:
+        with Locations((0, 0, 38.0 / 2.0)):
+            Cylinder(radius=27.6 / 2.0, height=38.0)
+    return p.part
+
+def Peristaltic_Pump_Motor_Head():
+    """Diitao peristaltic pump head with tubing stubs (h=20, d=31.7) at z=38."""
+    with BuildPart(mode=Mode.PRIVATE) as p:
+        with Locations((0, 0, 38.0 + 20.0 / 2.0)):
+            Cylinder(radius=31.7 / 2.0, height=20.0)
+        with Locations((12.0, 5.0, 38.0 + 10.0)):
+            Cylinder(radius=2.5, height=15.0, rotation=(0, 90, 30))
+        with Locations((12.0, -5.0, 38.0 + 10.0)):
+            Cylinder(radius=2.5, height=15.0, rotation=(0, 90, -30))
+    return p.part
+
+def External_Tubing_Loop_Right():
+    """External blue peristaltic tubing loop connecting pump out to reader in."""
+    p0 = (50.0 + 10.0, 20.0, 32.5)
+    p1 = (50.0 + 25.0, 20.0, 32.5)
+    p2 = (50.0 + 25.0, 20.0, 65.0 + 5.0 + 25.0 - 5.0)
+    p3 = (50.0 + 10.0, 20.0, 65.0 + 5.0 + 25.0 - 5.0)
+    with BuildPart(mode=Mode.PRIVATE) as p:
+        with BuildLine():
+            Spline([p0, p1, p2, p3])
+        v0 = Vector(p1) - Vector(p0)
+        plane = Plane(origin=p0, z_dir=v0)
+        with BuildSketch(plane):
+            Circle(radius=2.0)
+        sweep()
+    return p.part
+
+def Luer_Adapters_Cluster():
+    """4 Threaded Luer Adapters and 4 Elbow Adapters fitted under Bottom_Pusher_Plate."""
+    from src.adapters import Threaded_Luer_Adapter, Elbow_Adapter
+    parts = []
+    for a in [const.ANGLE_FLUID_IN_BOT, const.ANGLE_FLUID_IN_TOP, const.ANGLE_FLUID_OUT_BOT, const.ANGLE_FLUID_OUT_TOP]:
+        ang_rad = math.radians(a)
+        px = const.PORT_RADIUS * math.cos(ang_rad)
+        py = const.PORT_RADIUS * math.sin(ang_rad)
+        rot_z = 90.0 if a > 180 else -90.0
+        adapter = Threaded_Luer_Adapter().rotate(Axis.X, 180).move(Location((px, py, 0)))
+        elbow = Elbow_Adapter().rotate(Axis.X, 180).rotate(Axis.Z, rot_z).move(Location((px, py, -20.2)))
+        parts.append(adapter)
+        parts.append(elbow)
+    return Compound(children=parts)
+
+
 class Build123dEngine:
     """Direct build123d CAD tessellation, parametric assembly, and binary streaming engine."""
 
@@ -62,23 +114,40 @@ class Build123dEngine:
         self.part_builders = {
             # Cartridge stack
             "pusher": ("Bottom Pusher Plate (TPU)", Bottom_Pusher_Plate),
-            "base": ("Plate 1 Base Hex (PP 4mm)", Plate_1_Base_Hex),
-            "gasket_bot": ("Fitted Amplifier Gasket (Silicone)", Fitted_Amplifier_Gasket),
+            "base": ("Plate 1 Base Hex (Clear Acrylic)", Plate_1_Base_Hex),
+            "gasket_bot": ("Fitted Amplifier Gasket (Trans Channel)", Fitted_Amplifier_Gasket),
             "pcb": ("Active Rigid PCB (FR4)", PCB_Rigid_Active),
-            "gasket_top": ("Cast Nanopore Wafer Gasket (Silicone)", Cast_Nanopore_Wafer_Gasket),
-            "top_plate": ("Plate 3 Top Hex (PP 4mm)", Plate_3_Top_Hex),
-            "puck": ("Pressure Puck (Aluminum)", Pressure_Puck),
-            # Enclosure
-            "case": ("Reader Housing Case", Housing_Case_Reader),
-            "lid": ("Reader Housing Lid", Housing_Lid_Reader),
-            "cap_inner": ("Torque Cap Inner Drive", Torque_Cap_Inner),
-            "cap_outer": ("Torque Cap Outer Knurl", Torque_Cap_Outer),
-            # Wafer Molds
+            "wafer": ("Silicon Nanopore Wafer (4x4mm 45°)", Nanopore_Wafer_Silicon),
+            "gasket_top": ("Cast Nanopore Wafer Gasket (Cis Channel)", Cast_Nanopore_Wafer_Gasket),
+            "top_plate": ("Plate 3 Top Hex (Clear Acrylic)", Plate_3_Top_Hex),
+            "puck": ("Pressure Puck (Anodized Charcoal Al)", Pressure_Puck),
+            # Enclosure & Torque-Lock Cap
+            "case": ("Reader Housing Case (White)", Housing_Case_Reader),
+            "lid": ("Reader Housing Lid with M75 Thread (White)", Housing_Lid_Reader),
+            "cap_inner": ("Torque Cap Inner Drive (Silver)", Torque_Cap_Inner),
+            "cap_outer": ("Torque Cap Outer Knurl (Orange)", Torque_Cap_Outer),
+            # Standalone Wafer Molds & Cast Part
             "mold_left": ("Nanopore Wafer Mold (Left Half)", lambda: Nanopore_Wafer_Mold_Left(is_nanopore=True)),
             "mold_right": ("Nanopore Wafer Mold (Right Half)", lambda: Nanopore_Wafer_Mold_Right(is_nanopore=True)),
-            # Pump Module
+            "mold_gasket": ("Cast PDMS Gasket in Mold Cavity", lambda: Cast_Nanopore_Wafer_Gasket().move(Location((0, 0, -1.5875 / 2.0))).rotate(Axis.Y, 90).move(Location((0, 0, 35.0)))),
+            "mold_wafer": ("Silicon Nanopore Wafer in Mold", lambda: Nanopore_Wafer_Silicon().move(Location((0, 0, -0.4))).move(Location((0, 0, -1.5875 / 2.0))).rotate(Axis.Y, 90).move(Location((0, 0, 35.0)))),
+            # Pump Module Components
             "pump_case": ("Peristaltic Pump Housing Case", Housing_Pump_Case),
-            "pump_lid": ("Peristaltic Pump Housing Lid", Housing_Pump_Lid)
+            "pump_lid": ("Peristaltic Pump Housing Lid", Housing_Pump_Lid),
+            "pump_motor_body_1": ("Peristaltic Pump Motor 1 Body", lambda: Peristaltic_Pump_Motor_Body().move(Location((-25.0, 20.0, 0.0)))),
+            "pump_motor_head_1": ("Peristaltic Pump Motor 1 Head", lambda: Peristaltic_Pump_Motor_Head().move(Location((-25.0, 20.0, 0.0)))),
+            "pump_motor_body_2": ("Peristaltic Pump Motor 2 Body", lambda: Peristaltic_Pump_Motor_Body().move(Location((25.0, 20.0, 0.0)))),
+            "pump_motor_head_2": ("Peristaltic Pump Motor 2 Head", lambda: Peristaltic_Pump_Motor_Head().move(Location((25.0, 20.0, 0.0)))),
+            "tubing_loop_right": ("External Blue Tubing Loop (Right)", External_Tubing_Loop_Right),
+            "luer_adapters": ("Threaded Luer & Elbow Adapters", Luer_Adapters_Cluster),
+            # Dual Mold Visualizer at X = -130 (Multi_Mold_Visualizer in OpenSCAD)
+            "sys_mold_nanopore_left": ("Wafer Mold Left (Teal)", lambda: Nanopore_Wafer_Mold_Left(is_nanopore=True).move(Location((-130.0, -55.0, 0.0)))),
+            "sys_mold_nanopore_right": ("Wafer Mold Right (Teal)", lambda: Nanopore_Wafer_Mold_Right(is_nanopore=True).move(Location((-130.0, -55.0, 0.0)))),
+            "sys_mold_nanopore_gasket": ("Cast Wafer Gasket (Red)", lambda: Cast_Nanopore_Wafer_Gasket().move(Location((0, 0, -1.5875 / 2.0))).rotate(Axis.Y, 90).move(Location((-130.0, -55.0, 35.0)))),
+            "sys_mold_nanopore_wafer": ("Silicon Wafer (45°)", lambda: Nanopore_Wafer_Silicon().move(Location((0, 0, -0.4))).move(Location((0, 0, -1.5875 / 2.0))).rotate(Axis.Y, 90).move(Location((-130.0, -55.0, 35.0)))),
+            "sys_mold_amp_left": ("Amplifier Mold Left (Steel Blue)", lambda: Nanopore_Wafer_Mold_Left(is_nanopore=False).move(Location((-130.0, 55.0, 0.0)))),
+            "sys_mold_amp_right": ("Amplifier Mold Right (Steel Blue)", lambda: Nanopore_Wafer_Mold_Right(is_nanopore=False).move(Location((-130.0, 55.0, 0.0)))),
+            "sys_mold_amp_gasket": ("Cast Amplifier Gasket (Red)", lambda: Fitted_Amplifier_Gasket().move(Location((0, 0, -1.5875 / 2.0))).rotate(Axis.Y, 90).move(Location((-130.0, 55.0, 35.0))))
         }
         try:
             from src.assembly import route_tubing, route_wiring
@@ -192,7 +261,7 @@ class Build123dEngine:
     def get_assembly_manifest(self, mode: str = "cartridge", explode: float = 0.0) -> Dict[str, Any]:
         """
         Returns the assembly part list with exact non-penetrating stack positions,
-        material properties, colors, and live fluidic channel elevations.
+        material properties, colors, and live fluidic channel elevations matching OpenSCAD truth.
         """
         if not BUILD123D_AVAILABLE:
             return {"error": "build123d not available", "parts": []}
@@ -200,14 +269,17 @@ class Build123dEngine:
         explode_gap = max(0.0, float(explode))
 
         if mode in ["cartridge", "stack"]:
-            # Exact mathematical non-penetrating stackup:
-            # Layer 0: Pusher [0.0, 4.0] -> base_z = 0.0
-            # Layer 1: Base Plate [0.0, 4.0] -> base_z = 4.0
-            # Layer 2: Gasket Bot [0.0, 1.5875] -> base_z = 8.0
-            # Layer 3: Active PCB [0.0, 0.8] -> base_z = 9.6
-            # Layer 4: Gasket Top [-0.8, 1.5875] -> base_z = 11.2 (protrusion nests flush into PCB hole)
-            # Layer 5: Top Plate [0.0, 4.0] -> base_z = 12.0
-            # Layer 6: Pressure Puck [-3.0, 3.0] -> base_z = 19.0 (bottom rests flush on top of Plate 3 at 16.0)
+            # Mathematical non-penetrating stackup with Torque-Lock Cap:
+            # Layer 0: Pusher [0.0, 3.0] -> base_z = 0.0
+            # Layer 1: Base Plate [0.0, 4.0] -> base_z = 3.0
+            # Layer 2: Gasket Bot [0.0, 1.6] -> base_z = 7.0
+            # Layer 3: Active PCB [0.0, 0.8] -> base_z = 8.6
+            # Layer 3.5: Silicon Nanopore Wafer [-0.25, 0.25] -> base_z = 9.0
+            # Layer 4: Gasket Top [0.0, 1.6] -> base_z = 9.4 (protrusion -0.8 nests into PCB cutout down to 8.6)
+            # Layer 5: Top Plate [0.0, 4.0] -> base_z = 11.0
+            # Layer 6: Pressure Puck [-3.0, 3.0] -> base_z = 18.0 (bottom rests flush on Plate 3 at 15.0, top at 21.0)
+            # Layer 7: Torque Cap Outer [0.0, 30.2] -> base_z = 25.0
+            # Layer 8: Torque Cap Inner [0.0, 20.2] -> base_z = 29.0
 
             stack_layers = [
                 {
@@ -215,7 +287,8 @@ class Build123dEngine:
                     "name": "Bottom Pusher Plate (TPU)",
                     "layer": 0,
                     "base_z": 0.0,
-                    "thickness": 4.0,
+                    "slide_factor": 0.0,
+                    "thickness": 3.0,
                     "color": "#475569",
                     "opacity": 0.95,
                     "transparent": False,
@@ -224,96 +297,141 @@ class Build123dEngine:
                 },
                 {
                     "id": "base",
-                    "name": "Plate 1 Hex Base (PP 4mm)",
+                    "name": "Plate 1 Hex Base (Clear Acrylic)",
                     "layer": 1,
-                    "base_z": 4.0,
+                    "base_z": 3.0,
+                    "slide_factor": 0.5,
                     "thickness": 4.0,
-                    "color": "#10b981",
-                    "opacity": 0.75,
+                    "color": "#f1f5f9",
+                    "opacity": 0.65,
                     "transparent": True,
                     "metalness": 0.1,
-                    "roughness": 0.2
+                    "roughness": 0.1
                 },
                 {
                     "id": "gasket_bot",
                     "name": "Fitted Amplifier Gasket (Trans Channel)",
                     "layer": 2,
-                    "base_z": 8.0,
+                    "base_z": 7.0,
+                    "slide_factor": 1.0,
                     "thickness": 1.6,
-                    "color": "#f97316",
-                    "opacity": 0.90,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
                     "transparent": True,
                     "metalness": 0.1,
-                    "roughness": 0.5
+                    "roughness": 0.3
                 },
                 {
                     "id": "pcb",
                     "name": "Active Rigid PCB (Amplifier)",
                     "layer": 3,
-                    "base_z": 9.6,
+                    "base_z": 8.6,
+                    "slide_factor": 1.5,
                     "thickness": 0.8,
-                    "color": "#059669",
+                    "color": "#10b981",
                     "opacity": 1.0,
                     "transparent": False,
                     "metalness": 0.3,
                     "roughness": 0.4
                 },
                 {
+                    "id": "wafer",
+                    "name": "Silicon Nanopore Wafer (4x4mm 45°)",
+                    "layer": 3.5,
+                    "base_z": 9.0,
+                    "slide_factor": 1.75,
+                    "thickness": 0.5,
+                    "color": "#64748b",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
                     "id": "gasket_top",
                     "name": "Cast Nanopore Wafer Gasket (Cis Channel)",
                     "layer": 4,
-                    "base_z": 11.2,
+                    "base_z": 9.4,
+                    "slide_factor": 2.0,
                     "thickness": 1.6,
-                    "color": "#00f0ff",
-                    "opacity": 0.80,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
                     "transparent": True,
-                    "metalness": 0.15,
-                    "roughness": 0.25
+                    "metalness": 0.1,
+                    "roughness": 0.3
                 },
                 {
                     "id": "top_plate",
-                    "name": "Plate 3 Top Hex (PP 4mm)",
+                    "name": "Plate 3 Top Hex (Clear Acrylic)",
                     "layer": 5,
-                    "base_z": 12.0,
+                    "base_z": 11.0,
+                    "slide_factor": 2.5,
                     "thickness": 4.0,
-                    "color": "#38bdf8",
-                    "opacity": 0.60,
+                    "color": "#f1f5f9",
+                    "opacity": 0.65,
                     "transparent": True,
                     "metalness": 0.1,
                     "roughness": 0.1
                 },
                 {
                     "id": "puck",
-                    "name": "Pressure Puck (Anodized Al)",
+                    "name": "Pressure Puck (Anodized Charcoal Al)",
                     "layer": 6,
-                    "base_z": 19.0,
+                    "base_z": 18.0,
+                    "slide_factor": 3.0,
                     "thickness": 6.0,
-                    "color": "#ec4899",
+                    "color": "#1e293b",
                     "opacity": 0.95,
                     "transparent": False,
-                    "metalness": 0.5,
+                    "metalness": 0.6,
                     "roughness": 0.3
+                },
+                {
+                    "id": "cap_outer",
+                    "name": "Torque Cap Outer Knurl (Vivid Orange)",
+                    "layer": 7,
+                    "base_z": 25.0,
+                    "slide_factor": 3.5,
+                    "thickness": 30.2,
+                    "color": "#f59e0b",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.3,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "cap_inner",
+                    "name": "Torque Cap Inner Drive (Metallic Silver)",
+                    "layer": 8,
+                    "base_z": 29.0,
+                    "slide_factor": 4.0,
+                    "thickness": 20.2,
+                    "color": "#94a3b8",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.8,
+                    "roughness": 0.25
                 }
             ]
 
             parts = []
             for item in stack_layers:
-                z_pos = item["base_z"] + item["layer"] * explode_gap
+                z_pos = item["base_z"] + item["slide_factor"] * explode_gap
                 part_entry = dict(item)
                 part_entry["z_pos"] = z_pos
                 parts.append(part_entry)
 
             fluidic_heights = {
-                "zBot": 8.8 + 2 * explode_gap,
-                "zPore": 10.0 + 3 * explode_gap,
-                "zTop": 11.2 + 4 * explode_gap
+                "zBot": 7.8 + 1.0 * explode_gap,
+                "zPore": 9.0 + 1.75 * explode_gap,
+                "zTop": 10.2 + 2.0 * explode_gap
             }
 
             return {
                 "mode": mode,
                 "parts": parts,
                 "explode": explode_gap,
-                "total_stack_height": 22.0 + 6 * explode_gap,
+                "total_stack_height": 29.0 + 4.0 * explode_gap,
                 "fluidic_heights": fluidic_heights
             }
 
@@ -325,48 +443,64 @@ class Build123dEngine:
                     "name": "Fitted Amplifier Gasket (Trans Channel)",
                     "layer": 0,
                     "base_z": 0.0,
+                    "slide_factor": 0.0,
                     "thickness": 1.6,
-                    "color": "#f97316",
+                    "color": "#ef4444",
                     "opacity": 0.85,
                     "transparent": True,
                     "metalness": 0.1,
-                    "roughness": 0.4
+                    "roughness": 0.3
                 },
                 {
                     "id": "pcb",
                     "name": "Active Rigid PCB (Aperture Carrier)",
                     "layer": 1,
                     "base_z": 1.6,
+                    "slide_factor": 1.0,
                     "thickness": 0.8,
-                    "color": "#059669",
-                    "opacity": 0.95,
+                    "color": "#10b981",
+                    "opacity": 1.0,
                     "transparent": False,
                     "metalness": 0.3,
-                    "roughness": 0.3
+                    "roughness": 0.4
+                },
+                {
+                    "id": "wafer",
+                    "name": "Silicon Nanopore Wafer (4x4mm 45°)",
+                    "layer": 1.5,
+                    "base_z": 2.0,
+                    "slide_factor": 1.5,
+                    "thickness": 0.5,
+                    "color": "#64748b",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
                 },
                 {
                     "id": "gasket_top",
                     "name": "Cast Nanopore Wafer Gasket (Cis Channel)",
                     "layer": 2,
-                    "base_z": 3.2,
+                    "base_z": 2.4,
+                    "slide_factor": 2.0,
                     "thickness": 1.6,
-                    "color": "#00f0ff",
-                    "opacity": 0.80,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
                     "transparent": True,
-                    "metalness": 0.15,
-                    "roughness": 0.2
+                    "metalness": 0.1,
+                    "roughness": 0.3
                 }
             ]
             parts = []
             for item in stack_layers:
-                z_pos = item["base_z"] + item["layer"] * explode_gap
+                z_pos = item["base_z"] + item["slide_factor"] * explode_gap
                 part_entry = dict(item)
                 part_entry["z_pos"] = z_pos
                 parts.append(part_entry)
 
             fluidic_heights = {
                 "zBot": 0.8 + 0 * explode_gap,
-                "zPore": 2.0 + 1 * explode_gap,
+                "zPore": 2.0 + 1.5 * explode_gap,
                 "zTop": 3.2 + 2 * explode_gap
             }
             return {
@@ -377,55 +511,59 @@ class Build123dEngine:
             }
 
         elif mode == "enclosure":
-            # Full instrument reader enclosure
+            # Reader Instrument Enclosure (Case + Lid with Threaded Neck + Torque Cap)
             parts = [
                 {
                     "id": "case",
-                    "name": "Reader Base Housing",
+                    "name": "Reader Base Housing (Solid White)",
                     "layer": 0,
                     "base_z": 0.0,
+                    "slide_factor": 0.0,
                     "z_pos": 0.0,
-                    "color": "#1e293b",
-                    "opacity": 0.95,
+                    "color": "#ffffff",
+                    "opacity": 1.0,
                     "transparent": False,
-                    "metalness": 0.4,
-                    "roughness": 0.4
+                    "metalness": 0.2,
+                    "roughness": 0.35
                 },
                 {
                     "id": "lid",
-                    "name": "Reader Instrument Lid",
+                    "name": "Reader Instrument Lid with M75 Thread (Solid White)",
                     "layer": 1,
-                    "base_z": 26.0,
-                    "z_pos": 26.0 + explode_gap,
-                    "color": "#334155",
-                    "opacity": 0.70,
-                    "transparent": True,
+                    "base_z": 25.0,
+                    "slide_factor": 1.0,
+                    "z_pos": 25.0 + explode_gap,
+                    "color": "#f8fafc",
+                    "opacity": 1.0,
+                    "transparent": False,
+                    "metalness": 0.2,
+                    "roughness": 0.35
+                },
+                {
+                    "id": "cap_outer",
+                    "name": "Torque Cap Outer Knurl (Vivid Orange)",
+                    "layer": 2,
+                    "base_z": 55.0,
+                    "slide_factor": 2.0,
+                    "z_pos": 55.0 + explode_gap * 2.0,
+                    "color": "#f59e0b",
+                    "opacity": 0.95,
+                    "transparent": False,
                     "metalness": 0.3,
                     "roughness": 0.3
                 },
                 {
                     "id": "cap_inner",
-                    "name": "Torque Cap Inner Drive",
-                    "layer": 2,
-                    "base_z": 62.0,
-                    "z_pos": 62.0 + explode_gap * 2.0,
-                    "color": "#0284c7",
-                    "opacity": 0.95,
-                    "transparent": False,
-                    "metalness": 0.4,
-                    "roughness": 0.3
-                },
-                {
-                    "id": "cap_outer",
-                    "name": "Torque Cap Outer Knurl",
+                    "name": "Torque Cap Inner Drive (Metallic Silver)",
                     "layer": 3,
                     "base_z": 62.0,
-                    "z_pos": 62.0 + explode_gap * 2.0,
-                    "color": "#0ea5e9",
+                    "slide_factor": 2.5,
+                    "z_pos": 62.0 + explode_gap * 2.5,
+                    "color": "#94a3b8",
                     "opacity": 0.95,
                     "transparent": False,
-                    "metalness": 0.3,
-                    "roughness": 0.3
+                    "metalness": 0.8,
+                    "roughness": 0.25
                 }
             ]
             fluidic_heights = {
@@ -444,33 +582,91 @@ class Build123dEngine:
             parts = [
                 {
                     "id": "mold_left",
-                    "name": "Wafer Mold Left Half",
+                    "name": "Nanopore Wafer Mold Left Half (Teal)",
                     "layer": 0,
+                    "base_x": 0.0,
+                    "base_y": 0.0,
                     "base_z": 0.0,
-                    "z_pos": -explode_gap,
-                    "color": "#eab308",
+                    "x_pos": -explode_gap,
+                    "y_pos": 0.0,
+                    "z_pos": 0.0,
+                    "slide_dir": "x",
+                    "slide_factor": -1.0,
+                    "color": "#14b8a6",
                     "opacity": 0.95,
                     "transparent": False,
                     "metalness": 0.25,
                     "roughness": 0.25
                 },
                 {
-                    "id": "mold_right",
-                    "name": "Wafer Mold Right Half",
-                    "layer": 1,
+                    "id": "mold_gasket",
+                    "name": "Cast PDMS Gasket (Molded Red Silicone)",
+                    "layer": 0.5,
+                    "base_x": 0.0,
+                    "base_y": 0.0,
                     "base_z": 0.0,
-                    "z_pos": explode_gap,
-                    "color": "#f59e0b",
+                    "x_pos": 0.0,
+                    "y_pos": 0.0,
+                    "z_pos": 0.0,
+                    "slide_dir": "none",
+                    "slide_factor": 0.0,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
+                    "transparent": True,
+                    "metalness": 0.15,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "mold_wafer",
+                    "name": "Silicon Nanopore Wafer (4x4mm 45°)",
+                    "layer": 0.6,
+                    "base_x": 0.0,
+                    "base_y": 0.0,
+                    "base_z": 0.0,
+                    "x_pos": 0.0,
+                    "y_pos": 0.0,
+                    "z_pos": 0.0,
+                    "slide_dir": "none",
+                    "slide_factor": 0.0,
+                    "color": "#64748b",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
+                    "id": "mold_right",
+                    "name": "Nanopore Wafer Mold Right Half (Teal)",
+                    "layer": 1,
+                    "base_x": 0.0,
+                    "base_y": 0.0,
+                    "base_z": 0.0,
+                    "x_pos": explode_gap,
+                    "y_pos": 0.0,
+                    "z_pos": 0.0,
+                    "slide_dir": "x",
+                    "slide_factor": 1.0,
+                    "color": "#14b8a6",
                     "opacity": 0.95,
                     "transparent": False,
                     "metalness": 0.25,
                     "roughness": 0.25
                 }
             ]
+            mold_cavity_data = {
+                "cavity_z": 35.0,
+                "mold_h": 90.0,
+                "mold_w": 80.0,
+                "res_d": 15.0,
+                "sprue_z": 61.0,
+                "gasket_diam": 60.0,
+                "gasket_thick": 1.6
+            }
             return {
                 "mode": mode,
                 "parts": parts,
                 "explode": explode_gap,
+                "mold_cavity": mold_cavity_data,
                 "fluidic_heights": None
             }
 
@@ -478,9 +674,10 @@ class Build123dEngine:
             parts = [
                 {
                     "id": "pump_case",
-                    "name": "Peristaltic Pump Housing Case",
+                    "name": "Peristaltic Pump Housing Case (Dim Gray)",
                     "layer": 0,
                     "base_z": 0.0,
+                    "slide_factor": 0.0,
                     "z_pos": 0.0,
                     "color": "#1e293b",
                     "opacity": 0.95,
@@ -489,16 +686,69 @@ class Build123dEngine:
                     "roughness": 0.3
                 },
                 {
-                    "id": "pump_lid",
-                    "name": "Peristaltic Pump Housing Lid",
-                    "layer": 1,
-                    "base_z": 35.0,
-                    "z_pos": 35.0 + explode_gap,
-                    "color": "#475569",
-                    "opacity": 0.85,
-                    "transparent": True,
-                    "metalness": 0.4,
+                    "id": "pump_motor_body_1",
+                    "name": "Peristaltic Pump Motor 1 Body (Silver)",
+                    "layer": 0.2,
+                    "base_z": 5.0,
+                    "slide_factor": 0.0,
+                    "z_pos": 5.0,
+                    "color": "#cbd5e1",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
+                    "id": "pump_motor_head_1",
+                    "name": "Peristaltic Pump Motor 1 Head (Dodger Blue)",
+                    "layer": 0.3,
+                    "base_z": 5.0,
+                    "slide_factor": 0.0,
+                    "z_pos": 5.0,
+                    "color": "#0284c7",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.3,
                     "roughness": 0.3
+                },
+                {
+                    "id": "pump_motor_body_2",
+                    "name": "Peristaltic Pump Motor 2 Body (Silver)",
+                    "layer": 0.2,
+                    "base_z": 5.0,
+                    "slide_factor": 0.0,
+                    "z_pos": 5.0,
+                    "color": "#cbd5e1",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
+                    "id": "pump_motor_head_2",
+                    "name": "Peristaltic Pump Motor 2 Head (Dodger Blue)",
+                    "layer": 0.3,
+                    "base_z": 5.0,
+                    "slide_factor": 0.0,
+                    "z_pos": 5.0,
+                    "color": "#0284c7",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.3,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "pump_lid",
+                    "name": "Peristaltic Pump Housing Lid (Light Gray)",
+                    "layer": 1,
+                    "base_z": 65.0,
+                    "slide_factor": 1.0,
+                    "z_pos": 65.0 + explode_gap,
+                    "color": "#94a3b8",
+                    "opacity": 0.90,
+                    "transparent": False,
+                    "metalness": 0.7,
+                    "roughness": 0.25
                 }
             ]
             return {
@@ -510,51 +760,147 @@ class Build123dEngine:
 
         elif mode in ["system", "full_system"]:
             parts = [
-                # Bottom Peristaltic Pump Module
+                # 1. Bottom Peristaltic Pump Module
                 {
                     "id": "pump_case",
-                    "name": "Peristaltic Pump Housing Case",
+                    "name": "Peristaltic Pump Housing Case (Dim Gray)",
                     "layer": 0,
                     "base_z": -75.0,
+                    "slide_factor": -2.0,
                     "z_pos": -75.0 - explode_gap * 2.0,
-                    "color": "#0f172a",
+                    "color": "#1e293b",
                     "opacity": 0.95,
                     "transparent": False,
                     "metalness": 0.4,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "pump_motor_body_1",
+                    "name": "Pump Motor 1 Body (Silver)",
+                    "layer": 0.2,
+                    "base_z": -70.0,
+                    "slide_factor": -2.0,
+                    "z_pos": -70.0 - explode_gap * 2.0,
+                    "color": "#cbd5e1",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
+                    "id": "pump_motor_head_1",
+                    "name": "Pump Motor 1 Head (Blue)",
+                    "layer": 0.3,
+                    "base_z": -70.0,
+                    "slide_factor": -2.0,
+                    "z_pos": -70.0 - explode_gap * 2.0,
+                    "color": "#0284c7",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.3,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "pump_motor_body_2",
+                    "name": "Pump Motor 2 Body (Silver)",
+                    "layer": 0.2,
+                    "base_z": -70.0,
+                    "slide_factor": -2.0,
+                    "z_pos": -70.0 - explode_gap * 2.0,
+                    "color": "#cbd5e1",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
+                    "id": "pump_motor_head_2",
+                    "name": "Pump Motor 2 Head (Blue)",
+                    "layer": 0.3,
+                    "base_z": -70.0,
+                    "slide_factor": -2.0,
+                    "z_pos": -70.0 - explode_gap * 2.0,
+                    "color": "#0284c7",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.3,
                     "roughness": 0.3
                 },
                 {
                     "id": "pump_lid",
-                    "name": "Pump Module Inter-Stage Lid",
+                    "name": "Pump Module Inter-Stage Lid (Light Gray)",
                     "layer": 1,
-                    "base_z": -12.0,
-                    "z_pos": -12.0 - explode_gap,
-                    "color": "#1e293b",
+                    "base_z": -10.0,
+                    "slide_factor": -1.0,
+                    "z_pos": -10.0 - explode_gap,
+                    "color": "#94a3b8",
                     "opacity": 0.90,
                     "transparent": False,
-                    "metalness": 0.4,
-                    "roughness": 0.3
+                    "metalness": 0.7,
+                    "roughness": 0.25
                 },
-                # Reader Housing
+                # 2. External Tubing Loop
+                {
+                    "id": "tubing_loop_right",
+                    "name": "External Peristaltic Tubing Loop (Sky Blue)",
+                    "layer": 1.5,
+                    "base_z": -75.0,
+                    "slide_factor": 0.0,
+                    "z_pos": -75.0,
+                    "color": "#00bfff",
+                    "opacity": 0.85,
+                    "transparent": True,
+                    "metalness": 0.2,
+                    "roughness": 0.2
+                },
+                # 3. Reader Enclosure
                 {
                     "id": "case",
-                    "name": "Reader Instrument Base Case",
+                    "name": "Reader Instrument Base Case (Solid White)",
                     "layer": 2,
                     "base_z": 0.0,
+                    "slide_factor": 0.0,
                     "z_pos": 0.0,
-                    "color": "#1e293b",
+                    "color": "#ffffff",
+                    "opacity": 1.0,
+                    "transparent": False,
+                    "metalness": 0.2,
+                    "roughness": 0.35
+                },
+                {
+                    "id": "lid",
+                    "name": "Reader Instrument Lid with M75 Thread (Solid White)",
+                    "layer": 3,
+                    "base_z": 5.0,
+                    "slide_factor": 0.4,
+                    "z_pos": 5.0 + explode_gap * 0.4,
+                    "color": "#f8fafc",
+                    "opacity": 1.0,
+                    "transparent": False,
+                    "metalness": 0.2,
+                    "roughness": 0.35
+                },
+                # 4. Cartridge Stack (seated atop Lid ceiling inside M75 neck)
+                {
+                    "id": "luer_adapters",
+                    "name": "Threaded Luer & Elbow Adapters",
+                    "layer": 3.8,
+                    "base_z": 30.0,
+                    "slide_factor": 0.7,
+                    "z_pos": 30.0 + explode_gap * 0.7,
+                    "color": "#94a3b8",
                     "opacity": 0.95,
                     "transparent": False,
-                    "metalness": 0.4,
-                    "roughness": 0.4
+                    "metalness": 0.6,
+                    "roughness": 0.3
                 },
-                # Cartridge stack seated in reader neck
                 {
                     "id": "pusher",
                     "name": "Bottom Pusher Plate (TPU)",
-                    "layer": 3,
-                    "base_z": 12.0,
-                    "z_pos": 12.0,
+                    "layer": 4,
+                    "base_z": 30.0,
+                    "slide_factor": 0.9,
+                    "z_pos": 30.0 + explode_gap * 0.9,
                     "color": "#475569",
                     "opacity": 0.95,
                     "transparent": False,
@@ -563,143 +909,236 @@ class Build123dEngine:
                 },
                 {
                     "id": "base",
-                    "name": "Plate 1 Hex Base (PP 4mm)",
-                    "layer": 4,
-                    "base_z": 16.0,
-                    "z_pos": 16.0 + explode_gap * 0.5,
-                    "color": "#10b981",
-                    "opacity": 0.75,
+                    "name": "Plate 1 Hex Base (Clear Acrylic)",
+                    "layer": 5,
+                    "base_z": 33.0,
+                    "slide_factor": 1.2,
+                    "z_pos": 33.0 + explode_gap * 1.2,
+                    "color": "#f1f5f9",
+                    "opacity": 0.65,
                     "transparent": True,
                     "metalness": 0.1,
-                    "roughness": 0.2
+                    "roughness": 0.1
                 },
                 {
                     "id": "gasket_bot",
                     "name": "Fitted Amplifier Gasket (Trans Channel)",
-                    "layer": 5,
-                    "base_z": 20.0,
-                    "z_pos": 20.0 + explode_gap * 1.0,
-                    "color": "#f97316",
-                    "opacity": 0.90,
+                    "layer": 6,
+                    "base_z": 37.0,
+                    "slide_factor": 1.5,
+                    "z_pos": 37.0 + explode_gap * 1.5,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
                     "transparent": True,
                     "metalness": 0.1,
-                    "roughness": 0.5
+                    "roughness": 0.3
                 },
                 {
                     "id": "pcb",
                     "name": "Active Rigid PCB (Amplifier)",
-                    "layer": 6,
-                    "base_z": 21.6,
-                    "z_pos": 21.6 + explode_gap * 1.5,
-                    "color": "#059669",
+                    "layer": 7,
+                    "base_z": 38.6,
+                    "slide_factor": 1.8,
+                    "z_pos": 38.6 + explode_gap * 1.8,
+                    "color": "#10b981",
                     "opacity": 1.0,
                     "transparent": False,
                     "metalness": 0.3,
                     "roughness": 0.4
                 },
                 {
+                    "id": "wafer",
+                    "name": "Silicon Nanopore Wafer (4x4mm 45°)",
+                    "layer": 7.5,
+                    "base_z": 39.0,
+                    "slide_factor": 1.95,
+                    "z_pos": 39.0 + explode_gap * 1.95,
+                    "color": "#64748b",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.85,
+                    "roughness": 0.2
+                },
+                {
                     "id": "gasket_top",
                     "name": "Cast Nanopore Wafer Gasket (Cis Channel)",
-                    "layer": 7,
-                    "base_z": 23.2,
-                    "z_pos": 23.2 + explode_gap * 2.0,
-                    "color": "#00f0ff",
-                    "opacity": 0.80,
+                    "layer": 8,
+                    "base_z": 39.4,
+                    "slide_factor": 2.1,
+                    "z_pos": 39.4 + explode_gap * 2.1,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
                     "transparent": True,
-                    "metalness": 0.15,
-                    "roughness": 0.25
+                    "metalness": 0.1,
+                    "roughness": 0.3
                 },
                 {
                     "id": "top_plate",
-                    "name": "Plate 3 Top Hex (PP 4mm)",
-                    "layer": 8,
-                    "base_z": 24.0,
-                    "z_pos": 24.0 + explode_gap * 2.5,
-                    "color": "#38bdf8",
-                    "opacity": 0.60,
+                    "name": "Plate 3 Top Hex (Clear Acrylic)",
+                    "layer": 9,
+                    "base_z": 41.0,
+                    "slide_factor": 2.4,
+                    "z_pos": 41.0 + explode_gap * 2.4,
+                    "color": "#f1f5f9",
+                    "opacity": 0.65,
                     "transparent": True,
                     "metalness": 0.1,
                     "roughness": 0.1
                 },
                 {
                     "id": "puck",
-                    "name": "Pressure Puck (Aluminum)",
-                    "layer": 9,
-                    "base_z": 31.0,
-                    "z_pos": 31.0 + explode_gap * 3.0,
-                    "color": "#ec4899",
+                    "name": "Pressure Puck (Anodized Charcoal Al)",
+                    "layer": 10,
+                    "base_z": 48.0,
+                    "slide_factor": 2.7,
+                    "z_pos": 48.0 + explode_gap * 2.7,
+                    "color": "#1e293b",
                     "opacity": 0.95,
                     "transparent": False,
-                    "metalness": 0.5,
+                    "metalness": 0.6,
                     "roughness": 0.3
                 },
-                # Reader Lid & Torque Cap
+                # 5. Torque-Lock Cap Assembly
                 {
-                    "id": "lid",
-                    "name": "Reader Instrument Lid",
-                    "layer": 10,
-                    "base_z": 30.0,
-                    "z_pos": 30.0 + explode_gap * 1.5,
-                    "color": "#334155",
-                    "opacity": 0.70,
-                    "transparent": True,
+                    "id": "cap_outer",
+                    "name": "Torque Cap Outer Knurl (Vivid Orange)",
+                    "layer": 11,
+                    "base_z": 58.0,
+                    "slide_factor": 3.1,
+                    "z_pos": 58.0 + explode_gap * 3.1,
+                    "color": "#f59e0b",
+                    "opacity": 0.95,
+                    "transparent": False,
                     "metalness": 0.3,
                     "roughness": 0.3
                 },
                 {
                     "id": "cap_inner",
-                    "name": "Torque Cap Inner Drive",
-                    "layer": 11,
-                    "base_z": 62.0,
-                    "z_pos": 62.0 + explode_gap * 3.5,
+                    "name": "Torque Cap Inner Drive (Metallic Silver)",
+                    "layer": 12,
+                    "base_z": 64.0,
+                    "slide_factor": 3.5,
+                    "z_pos": 64.0 + explode_gap * 3.5,
+                    "color": "#94a3b8",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.8,
+                    "roughness": 0.25
+                },
+                # 6. Side Mold Visualizer (Multi_Mold_Visualizer in OpenSCAD at X = -130)
+                {
+                    "id": "sys_mold_nanopore_left",
+                    "name": "Wafer Mold Left Half (Teal)",
+                    "layer": 20,
+                    "base_x": -130.0,
+                    "base_y": -55.0,
+                    "base_z": -30.0,
+                    "x_pos": -130.0 - explode_gap * 0.6,
+                    "y_pos": -55.0,
+                    "z_pos": -30.0,
+                    "slide_dir": "x",
+                    "slide_factor": -0.6,
+                    "color": "#14b8a6",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.25,
+                    "roughness": 0.25
+                },
+                {
+                    "id": "sys_mold_nanopore_gasket",
+                    "name": "Cast Wafer Gasket (Red Silicone)",
+                    "layer": 20.5,
+                    "base_x": -130.0,
+                    "base_y": -55.0,
+                    "base_z": -30.0,
+                    "x_pos": -130.0,
+                    "y_pos": -55.0,
+                    "z_pos": -30.0,
+                    "slide_dir": "none",
+                    "slide_factor": 0.0,
+                    "color": "#ef4444",
+                    "opacity": 0.85,
+                    "transparent": True,
+                    "metalness": 0.15,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "sys_mold_nanopore_right",
+                    "name": "Wafer Mold Right Half (Teal)",
+                    "layer": 21,
+                    "base_x": -130.0,
+                    "base_y": -55.0,
+                    "base_z": -30.0,
+                    "x_pos": -130.0 + explode_gap * 0.6,
+                    "y_pos": -55.0,
+                    "z_pos": -30.0,
+                    "slide_dir": "x",
+                    "slide_factor": 0.6,
+                    "color": "#14b8a6",
+                    "opacity": 0.95,
+                    "transparent": False,
+                    "metalness": 0.25,
+                    "roughness": 0.25
+                },
+                {
+                    "id": "sys_mold_amp_left",
+                    "name": "Amplifier Mold Left Half (Steel Blue)",
+                    "layer": 22,
+                    "base_x": -130.0,
+                    "base_y": 55.0,
+                    "base_z": -30.0,
+                    "x_pos": -130.0 - explode_gap * 0.6,
+                    "y_pos": 55.0,
+                    "z_pos": -30.0,
+                    "slide_dir": "x",
+                    "slide_factor": -0.6,
                     "color": "#0284c7",
                     "opacity": 0.95,
                     "transparent": False,
-                    "metalness": 0.4,
-                    "roughness": 0.3
+                    "metalness": 0.25,
+                    "roughness": 0.25
                 },
                 {
-                    "id": "cap_outer",
-                    "name": "Torque Cap Outer Knurl",
-                    "layer": 12,
-                    "base_z": 62.0,
-                    "z_pos": 62.0 + explode_gap * 3.5,
-                    "color": "#0ea5e9",
-                    "opacity": 0.95,
-                    "transparent": False,
-                    "metalness": 0.3,
-                    "roughness": 0.3
-                },
-                # Fluidic Tubing & Wiring Loom
-                {
-                    "id": "tubing",
-                    "name": "Peristaltic Fluidic Tubing Splines",
-                    "layer": 13,
-                    "base_z": 0.0,
-                    "z_pos": 0.0,
-                    "color": "#00f0ff",
-                    "opacity": 0.75,
-                    "transparent": True,
-                    "metalness": 0.2,
-                    "roughness": 0.2
-                },
-                {
-                    "id": "wiring",
-                    "name": "Internal USB-C Wiring Loom",
-                    "layer": 14,
-                    "base_z": 0.0,
-                    "z_pos": 0.0,
+                    "id": "sys_mold_amp_gasket",
+                    "name": "Cast Amplifier Gasket (Red Silicone)",
+                    "layer": 22.5,
+                    "base_x": -130.0,
+                    "base_y": 55.0,
+                    "base_z": -30.0,
+                    "x_pos": -130.0,
+                    "y_pos": 55.0,
+                    "z_pos": -30.0,
+                    "slide_dir": "none",
+                    "slide_factor": 0.0,
                     "color": "#ef4444",
+                    "opacity": 0.85,
+                    "transparent": True,
+                    "metalness": 0.15,
+                    "roughness": 0.3
+                },
+                {
+                    "id": "sys_mold_amp_right",
+                    "name": "Amplifier Mold Right Half (Steel Blue)",
+                    "layer": 23,
+                    "base_x": -130.0,
+                    "base_y": 55.0,
+                    "base_z": -30.0,
+                    "x_pos": -130.0 + explode_gap * 0.6,
+                    "y_pos": 55.0,
+                    "z_pos": -30.0,
+                    "slide_dir": "x",
+                    "slide_factor": 0.6,
+                    "color": "#0284c7",
                     "opacity": 0.95,
                     "transparent": False,
-                    "metalness": 0.5,
-                    "roughness": 0.3
+                    "metalness": 0.25,
+                    "roughness": 0.25
                 }
             ]
             fluidic_heights = {
-                "zBot": 20.8 + explode_gap * 1.0,
-                "zPore": 22.0 + explode_gap * 1.5,
-                "zTop": 23.2 + explode_gap * 2.0
+                "zBot": 37.8 + explode_gap * 1.5,
+                "zPore": 39.0 + explode_gap * 1.95,
+                "zTop": 40.2 + explode_gap * 2.1
             }
             return {
                 "mode": mode,
