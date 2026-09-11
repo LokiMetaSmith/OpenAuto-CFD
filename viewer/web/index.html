@@ -60,10 +60,14 @@
             <!-- Dynamic parameter sliders injected here -->
           </div>
 
-          <div class="section-header" style="margin-top: 12px;">Active Optimization</div>
+          <div class="section-header" style="margin-top: 12px;">Active Optimization & GenCAD AI</div>
           <button class="action-btn btn-optimize" onclick="triggerInverseDesign()">
             <span>⚡</span>
             <span>AI Inverse Design (L-BFGS-B)</span>
+          </button>
+          <button id="btn-gencad-synth" class="action-btn" style="background: linear-gradient(135deg, #8b5cf6, #6366f1); margin-top: 6px;" onclick="synthesizeGenCADFromHUD()">
+            <span>✨</span>
+            <span>GenCAD Transformer Synthesize</span>
           </button>
           <button class="action-btn btn-dispatch" onclick="dispatchBackgroundSolver()">
             <span>▶</span>

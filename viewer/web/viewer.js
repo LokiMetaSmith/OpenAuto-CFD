@@ -613,6 +613,45 @@ async function triggerInverseDesign() {
   }
 }
 
+// --- GenCAD Generative Synthesis Action ---
+async function synthesizeGenCADFromHUD() {
+  showKiCadToast("🧬 GenCAD Synthesis: Querying Transformer AST Model...", 3000);
+  try {
+    const target = {
+      delta_p: 2200.0,
+      separation_efficiency: 95.0,
+      flow_rate_m3s: 0.012
+    };
+    const res = await fetch("/api/gencad/synthesize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        physics_target: target,
+        format_type: "build123d"
+      })
+    });
+    const data = await res.json();
+    if (data.status === "success" && data.synthesized_parameters) {
+      for (const [k, v] of Object.entries(data.synthesized_parameters)) {
+        const slider = document.getElementById(`slider-${k}`);
+        const display = document.getElementById(`val-${k}`);
+        if (slider) {
+          slider.value = v;
+          currentParams[k] = v;
+        }
+        if (display) {
+          display.innerText = Number(v).toFixed(2);
+        }
+      }
+      updateCorkscrewGeometry(currentParams);
+      showKiCadToast(`⚡ GenCAD AST Sequence -> Nearest Match: ${data.retrieved_nearest_match}`, 5000);
+    }
+  } catch (err) {
+    console.error("GenCAD Synthesis Error:", err);
+    showKiCadToast(`❌ GenCAD Error: ${err.message}`, 4000);
+  }
+}
+
 // --- Background Solver Queue ---
 async function dispatchBackgroundSolver() {
   const statusCard = document.getElementById("job-status-card");

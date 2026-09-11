@@ -356,6 +356,42 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
             )
             self._send_json(fdtd_res)
 
+        elif path == "/api/gencad/synthesize":
+            from gencad_driver import GenCADDriver
+            query = urllib.parse.parse_qs(parsed.query)
+            dp = float(query.get("delta_p", [2500.0])[0])
+            eff = float(query.get("separation_efficiency", [95.0])[0])
+            fmt = query.get("format", ["build123d"])[0]
+
+            driver = GenCADDriver()
+            res = driver.generate_and_export(
+                physics_target={"delta_p": dp, "separation_efficiency": eff},
+                output_dir="artifacts",
+                filename_prefix="gencad_hud_synthesized",
+                format_type=fmt,
+                use_transformer_sequence=True
+            )
+            self._send_json(res)
+
+        elif path == "/api/gencad/sample":
+            from gencad_driver import GenCADDriver
+            query = urllib.parse.parse_qs(parsed.query)
+            dp = float(query.get("delta_p", [2500.0])[0])
+            eff = float(query.get("separation_efficiency", [95.0])[0])
+            n_samples = int(query.get("n_samples", [3])[0])
+
+            driver = GenCADDriver()
+            samples = driver.sample_diverse_cad_programs(
+                {"delta_p": dp, "separation_efficiency": eff},
+                n_samples=n_samples,
+                format_type="build123d"
+            )
+            self._send_json({
+                "status": "success",
+                "physics_target": {"delta_p": dp, "separation_efficiency": eff},
+                "samples": samples
+            })
+
         else:
             super().do_GET()
 
@@ -582,6 +618,42 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                     fix_res["sync_warning"] = str(e)
 
             self._send_json(fix_res)
+
+        elif path == "/api/gencad/synthesize":
+            from gencad_driver import GenCADDriver
+            p_target = payload.get("physics_target", {})
+            dp = float(p_target.get("delta_p", payload.get("delta_p", 2500.0)))
+            eff = float(p_target.get("separation_efficiency", payload.get("separation_efficiency", 95.0)))
+            fmt = payload.get("format_type", payload.get("format", "build123d"))
+
+            driver = GenCADDriver()
+            res = driver.generate_and_export(
+                physics_target={"delta_p": dp, "separation_efficiency": eff},
+                output_dir="artifacts",
+                filename_prefix="gencad_hud_synthesized",
+                format_type=fmt,
+                use_transformer_sequence=True
+            )
+            self._send_json(res)
+
+        elif path == "/api/gencad/sample":
+            from gencad_driver import GenCADDriver
+            p_target = payload.get("physics_target", {})
+            dp = float(p_target.get("delta_p", payload.get("delta_p", 2500.0)))
+            eff = float(p_target.get("separation_efficiency", payload.get("separation_efficiency", 95.0)))
+            n_samples = int(payload.get("n_samples", 3))
+
+            driver = GenCADDriver()
+            samples = driver.sample_diverse_cad_programs(
+                {"delta_p": dp, "separation_efficiency": eff},
+                n_samples=n_samples,
+                format_type="build123d"
+            )
+            self._send_json({
+                "status": "success",
+                "physics_target": {"delta_p": dp, "separation_efficiency": eff},
+                "samples": samples
+            })
 
         else:
             self._send_json({"error": f"Unknown endpoint {path}"}, 404)
