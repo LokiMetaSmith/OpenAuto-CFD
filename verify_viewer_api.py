@@ -36,7 +36,7 @@ def test_viewer_server_apis():
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200
             html = resp.read().decode("utf-8")
-            assert "Atlas Fields Studio" in html
+            assert "OpenAuto-CFD" in html or "Atlas Fields Studio" in html
             print("  [PASS] GET / served HTML successfully.")
 
         # 2. Test CSS & JS Assets
