@@ -110,7 +110,6 @@ def main():
         verbose=args.verbose,
         debug=args.debug
     )
-
     # Handle --no-llm logic
     if args.no_llm and "GEMINI_API_KEY" in os.environ:
         print("Explicitly disabling LLM due to --no-llm flag.")
@@ -403,6 +402,8 @@ def main():
             for w in range(args.parallel_workers):
                 cmd = [sys.executable, "optimizer/worker.py", "--id", f"worker-{w}", "--loop", "--local", args.config_file]
                 if args.dry_run: cmd.append("--dry-run")
+                if args.cad_engine: cmd.extend(["--cad-engine", args.cad_engine])
+                if args.turbulence: cmd.extend(["--turbulence", args.turbulence])
                 if args.case_dir: cmd.extend(["--case-dir", args.case_dir])
                 # We assume workers pick up from the same DB file location (default behavior)
 
@@ -450,6 +451,17 @@ def main():
                 if run.get("id") in current_batch_ids and run.get("status") == "completed":
                     if run.get("images"):
                         last_run_images = run["images"]
+
+            if not args.no_cleanup:
+                try:
+                    from scoring import calculate_score
+                    sorted_runs = sorted(full_history, key=lambda r: calculate_score(r.get("metrics", {}), config), reverse=True)
+                    top_runs = sorted_runs[:10]
+                    store.clean_artifacts(top_runs)
+                except Exception as e:
+                    print(f"Error cleaning artifacts: {e}")
+                    top_runs = store.get_top_runs(10)
+                    store.clean_artifacts(top_runs)
 
             i += len(current_batch_ids)
 

@@ -1736,27 +1736,6 @@ subModels
 
 cloudFunctions
 {
-    // particleCollector1
-    // {
-    //     type            particleCollector;
-    //     mode            patch;
-    //     patches         ( corkscrew inlet outlet {% if bins %}{% for bin in bins %} bin_{{ bin.index }}{% endfor %}{% endif %} );
-    //     removeCollected false;
-    //     resetOnWrite    false;
-    //     log             true;
-    //     negateParcelsOppositeNormal false;
-    //     surfaceFormat   vtk;
-    //     polygonData     off;
-    // }
-
-    //patchPostProcessing1
-    //{
-    //    type            patchPostProcessing;
-    //    patches         ( corkscrew inlet outlet {% if bins %}{% for bin in bins %} bin_{{ bin.index }}{% endfor %}{% endif %} );
-    //    maxStoredParcels 1000000;
-    //    resetOnWrite    false;
-    //    log             true;
-    //}
 }
 
 // ************************************************************************* //
@@ -2856,6 +2835,13 @@ boundaryField
             self._switch_fvSchemes_to_transient()
             # Turbulence is KEPT ON for stochasticDispersionRAS
 
+            # Generate wallDist for turbulence models (prevents yWall crash)
+            self.run_command(["postProcess", "-func", "wallDist"], log_file=log_file, description="Generating wallDist")
+
+            # Verify carrier field (U) - helps debug SIGFPE if U is zero/NaN
+            print("Verifying carrier field (U) before particle tracking...")
+            self.run_command(["postProcess", "-func", "minMax(U)"], log_file=log_file, description="Verifying Field U")
+
             # 4. Run Solver
             success = self.run_command(["icoUncoupledKinematicParcelFoam"], log_file=log_file, description="Particle Tracking", timeout=14400)
             if not success:
@@ -3047,51 +3033,59 @@ boundaryField
             # Let's try to find ANY mention of "bin_" and numbers.
             # If not found, we leave the dict empty.
 
-            # Try to parse `particleCollector` file output if available (replaced patchPostProcessing)
-            # Path: case/postProcessing/lagrangian/cloud/particleCollector1/*/particleCollector1.dat
-            # pp_base = os.path.join(self.case_dir, "postProcessing", "lagrangian", "cloud", "particleCollector1")
+            # Parse output from particleCollector1
+            pc_base = os.path.join(self.case_dir, "postProcessing", "lagrangian", "cloud", "particleCollector1")
+            if os.path.exists(pc_base):
+                # Find latest time directory
+                time_dirs = [d for d in glob.glob(os.path.join(pc_base, "*")) if os.path.isdir(d)]
+                if time_dirs:
+                    latest_pp_dir = max(time_dirs, key=os.path.getmtime)
+                    # Iterate over files in latest directory
+                    for fname in os.listdir(latest_pp_dir):
+                        fpath = os.path.join(latest_pp_dir, fname)
+                        if os.path.isfile(fpath) and not fname.startswith("#"):
+                            # Count lines (assuming one line per particle)
+                            try:
+                                with open(fpath, 'r') as f:
+                                    # Count non-empty lines that don't start with #
+                                    count = sum(1 for line in f if line.strip() and not line.strip().startswith("#"))
 
-            # Path: case/postProcessing/kinematicCloud/patchPostProcessing1/*/patchPostProcessing1.dat
-            pp_base = os.path.join(self.case_dir, "postProcessing", "kinematicCloud", "patchPostProcessing1")
+                                # Use filename as bin/patch name (e.g., bin_1.dat -> bin_1)
+                                patch_name = os.path.splitext(fname)[0]
+                                metrics['capture_by_bin'][patch_name] = count
+                            except Exception as e:
+                                print(f"Error reading particle collector file {fname}: {e}")
 
-            if os.path.exists(pp_base):
-                 # Find latest time
-                 time_dirs = glob.glob(os.path.join(pp_base, "*"))
-                 if time_dirs:
-                     latest_pp_dir = max(time_dirs, key=os.path.getmtime)
-                     dat_file = os.path.join(latest_pp_dir, "patchPostProcessing1.dat")
-                     # dat_file = os.path.join(latest_pp_dir, "particleCollector1.dat")
-
-                     if os.path.exists(dat_file):
-                         # Format: # Time patch1 patch2 ...
-                         # Data: time val1 val2 ...
-                         try:
-                             with open(dat_file, 'r') as f:
-                                 lines = f.readlines()
-                                 # Parse header to get patch names
-                                 header = None
-                                 for line in lines:
-                                     if line.startswith("#") and "Time" in line:
-                                         header = line.replace("#", "").split()
-                                         break
-
-                                 if header:
-                                     # Get last data line
-                                     last_line = lines[-1].strip()
-                                     if last_line and not last_line.startswith("#"):
-                                         data = last_line.split()
-                                         # Map header to data
-                                         # Header: Time patch1 patch2 ...
-                                         # Data: time val1 val2 ...
-                                         for i, col_name in enumerate(header):
-                                             if col_name.startswith("bin_"):
-                                                 try:
-                                                     val = float(data[i])
-                                                     metrics['capture_by_bin'][col_name] = val
-                                                 except (IndexError, ValueError):
-                                                     pass
-                         except Exception as e:
-                             print(f"Error parsing patchPostProcessing: {e}")
+            # Fallback to patchPostProcessing1 if particleCollector1 didn't yield results
+            if not metrics.get('capture_by_bin'):
+                pp_base = os.path.join(self.case_dir, "postProcessing", "kinematicCloud", "patchPostProcessing1")
+                if os.path.exists(pp_base):
+                    time_dirs = glob.glob(os.path.join(pp_base, "*"))
+                    if time_dirs:
+                        latest_pp_dir = max(time_dirs, key=os.path.getmtime)
+                        dat_file = os.path.join(latest_pp_dir, "patchPostProcessing1.dat")
+                        if os.path.exists(dat_file):
+                            try:
+                                with open(dat_file, 'r') as f:
+                                    lines = f.readlines()
+                                    header = None
+                                    for line in lines:
+                                        if line.startswith("#") and "Time" in line:
+                                            header = line.replace("#", "").split()
+                                            break
+                                    if header:
+                                        last_line = lines[-1].strip()
+                                        if last_line and not last_line.startswith("#"):
+                                            data = last_line.split()
+                                            for i, col_name in enumerate(header):
+                                                if col_name.startswith("bin_"):
+                                                    try:
+                                                        val = float(data[i])
+                                                        metrics['capture_by_bin'][col_name] = val
+                                                    except (IndexError, ValueError):
+                                                        pass
+                            except Exception as e:
+                                print(f"Error parsing patchPostProcessing: {e}")
 
         # Calculate Efficiency Per Bin (Percent)
         # Relies on total injected particles (sum of all models)
