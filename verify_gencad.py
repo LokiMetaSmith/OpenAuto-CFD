@@ -1,10 +1,10 @@
 """
 verify_gencad.py
 
-Verification suite for GenCAD (Physics-Driven CAD Embedding & Retrieval):
+Verification suite for GenCAD (Physics-Driven CAD Embedding, AST Sequence Tokenization & Transformer Model):
   1. Test Physics Encoding & Contrastive Latent Retrieval (top-k nearest CAD programs).
-  2. Test Continuous CAD Parameter Synthesis conditioned on CFD target feature vectors.
-  3. Test Executable CAD Script Generation (OpenSCAD .scad & build123d .py formats).
+  2. Test CAD Sequence Tokenizer (AST Token encoding and Python build123d deserialization).
+  3. Test PyTorch GenCADTransformerModel autoregressive sequence inference.
   4. Test CAD Engine Factory integration & STL export to confirm clean connection to downstream CFD meshing.
   5. Test CADAgentToolRegistry GenCAD tool integration.
 """
@@ -15,7 +15,12 @@ import sys
 # Ensure optimizer directory is in python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "optimizer"))
 
-from gencad_driver import GenCADDriver
+from gencad_driver import (
+    GenCADDriver,
+    CADSequenceTokenizer,
+    GenCADTransformerModel,
+    HAS_TORCH
+)
 from cad_agent_tools import CADAgentToolRegistry
 from cad_factory import CadEngineFactory
 
@@ -56,53 +61,63 @@ def test_gencad_encoding_and_retrieval():
     print("[PASS] Test 1: Physics latent space encoding and top-k retrieval validated.")
 
 
-def test_gencad_synthesis_and_script_generation():
-    print("\n--- Test 2: GenCAD Parameter Synthesis & CAD Code Export ---")
-    driver = GenCADDriver()
+def test_cad_sequence_tokenizer_and_ast():
+    print("\n--- Test 2: CAD Sequence Tokenizer & AST Generator ---")
+    tokenizer = CADSequenceTokenizer()
+    assert tokenizer.vocab_size > 30
 
+    test_params = {
+        "number_of_complete_revolutions": 3.0,
+        "helix_path_radius_mm": 2.5,
+        "helix_profile_radius_mm": 1.5,
+        "blade_chamfer_mm": 0.8
+    }
+
+    # Encode to AST token IDs
+    token_ids = tokenizer.encode_parameters(test_params)
+    assert len(token_ids) > 10
+    assert token_ids[0] == tokenizer.bos_id
+    assert token_ids[-1] == tokenizer.eos_id
+
+    # Decode back to parameters
+    decoded_params = tokenizer.decode_tokens_to_parameters(token_ids)
+    assert decoded_params["number_of_complete_revolutions"] == 3.0
+    assert decoded_params["blade_chamfer_mm"] == 0.8
+
+    # Deserialize to executable build123d code
+    script_code = tokenizer.decode_tokens_to_script(token_ids, format_type="build123d")
+    assert "from build123d import *" in script_code
+    assert "Helix(pitch=pitch" in script_code
+
+    print(f"  Tokenizer vocabulary size: {tokenizer.vocab_size}")
+    print(f"  Encoded {len(token_ids)} AST sequence tokens -> Decoded parameters cleanly.")
+    print("[PASS] Test 2: CAD sequence tokenization and AST deserialization validated.")
+
+
+def test_gencad_transformer_model():
+    print("\n--- Test 3: PyTorch GenCAD Transformer Sequence Generation ---")
+    assert HAS_TORCH, "PyTorch is required for Transformer model test"
+
+    driver = GenCADDriver()
     target_cfd = {
-        "delta_p": 2200.0,
-        "separation_efficiency": 93.5,
+        "delta_p": 2300.0,
+        "separation_efficiency": 94.5,
         "flow_rate_m3s": 0.011
     }
 
-    # Synthesize continuous parameters
-    synth_params = driver.synthesize_cad_parameters(target_cfd)
+    # Execute transformer sequence generation
+    tok_ids, synth_params, script_code = driver.generate_transformer_ast_sequence(target_cfd)
+    assert len(tok_ids) > 5
     assert "number_of_complete_revolutions" in synth_params
-    assert "helix_path_radius_mm" in synth_params
-    assert "helix_profile_radius_mm" in synth_params
-    assert "blade_chamfer_mm" in synth_params
+    assert "from build123d import *" in script_code
 
-    print(f"  Synthesized CAD Parameters: {synth_params}")
-
-    # Generate OpenSCAD code
-    scad_script = driver.generate_cad_script(synth_params, format_type="openscad")
-    assert "number_of_complete_revolutions" in scad_script
-    assert "module corkscrew_vane()" in scad_script
-    assert len(scad_script) > 200
-
-    # Generate build123d code
-    py_script = driver.generate_cad_script(synth_params, format_type="build123d")
-    assert "from build123d import *" in py_script
-    assert "Helix(pitch=pitch" in py_script
-    assert len(py_script) > 200
-
-    # Full export workflow
-    export_res = driver.generate_and_export(
-        physics_target=target_cfd,
-        output_dir="artifacts",
-        filename_prefix="test_gencad_export",
-        format_type="build123d"
-    )
-    assert export_res["status"] == "success"
-    assert os.path.exists(export_res["output_file"])
-    print(f"  Successfully exported build123d script to {export_res['output_file']}")
-
-    print("[PASS] Test 2: Parameter synthesis and CAD script generation validated.")
+    print(f"  Generated AST Token Sequence IDs ({len(tok_ids)} tokens): {tok_ids[:8]}...")
+    print(f"  Transformer generated parameters: {synth_params}")
+    print("[PASS] Test 3: PyTorch GenCAD Transformer model sequence generation validated.")
 
 
 def test_cad_factory_downstream_meshing_connection():
-    print("\n--- Test 3: Downstream CAD Meshing Connection ---")
+    print("\n--- Test 4: Downstream CAD Meshing Connection ---")
     driver = GenCADDriver()
 
     target_cfd = {
@@ -110,12 +125,13 @@ def test_cad_factory_downstream_meshing_connection():
         "separation_efficiency": 94.0
     }
 
-    # Generate build123d script
+    # Generate build123d script via Transformer AST sequence workflow
     res = driver.generate_and_export(
         physics_target=target_cfd,
         output_dir="artifacts",
         filename_prefix="gencad_mesh_test",
-        format_type="build123d"
+        format_type="build123d",
+        use_transformer_sequence=True
     )
 
     py_path = res["output_file"]
@@ -144,11 +160,11 @@ def test_cad_factory_downstream_meshing_connection():
     print(f"  Generated STL at '{stl_out}' ({os.path.getsize(stl_out)} bytes)")
     print(f"  Bounding box calculated for downstream meshing: min={min_pt}, max={max_pt}")
 
-    print("[PASS] Test 3: Downstream CFD meshing connection confirmed.")
+    print("[PASS] Test 4: Downstream CFD meshing connection confirmed.")
 
 
 def test_cad_agent_tool_registry_gencad_integration():
-    print("\n--- Test 4: CADAgentToolRegistry GenCAD Tool Integration ---")
+    print("\n--- Test 5: CADAgentToolRegistry GenCAD Tool Integration ---")
     registry = CADAgentToolRegistry(artifacts_dir="artifacts")
 
     # 1. Test retrieve_cad_from_physics_target tool
@@ -169,15 +185,16 @@ def test_cad_agent_tool_registry_gencad_integration():
     assert os.path.exists(syn_res["output_file"])
     print(f"  synthesize_gencad_script: generated {syn_res['output_file']}")
 
-    print("[PASS] Test 4: GenCAD agent tools executed cleanly via registry.")
+    print("[PASS] Test 5: GenCAD agent tools executed cleanly via registry.")
 
 
 if __name__ == "__main__":
     print("================================================================")
-    print("         RUNNING GENCAD PHYSICS-DRIVEN CAD RETRIEVAL SUITE      ")
+    print("  RUNNING GENCAD TRANSFORMER & AST SEQUENCE GENERATION SUITE    ")
     print("================================================================")
     test_gencad_encoding_and_retrieval()
-    test_gencad_synthesis_and_script_generation()
+    test_cad_sequence_tokenizer_and_ast()
+    test_gencad_transformer_model()
     test_cad_factory_downstream_meshing_connection()
     test_cad_agent_tool_registry_gencad_integration()
-    print("\n>>> ALL GENCAD TESTS PASSED SUCCESSFULLY! <<<")
+    print("\n>>> ALL GENCAD TRANSFORMER SEQUENCE TESTS PASSED SUCCESSFULLY! <<<")
