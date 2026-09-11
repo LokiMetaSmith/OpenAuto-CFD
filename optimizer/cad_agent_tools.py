@@ -9,6 +9,11 @@ Equips the LLM with native function-calling tools to:
   4. dispatch_simulation: Background non-blocking simulation queue dispatch (coarse/fine).
   5. check_simulation_status: Asynchronous job status and metrics polling.
   6. generate_scad_code: Geometric validation and OpenSCAD parametric code generation.
+  7. retrieve_cad_from_physics_target: GenCAD latent space retrieval of CAD models given CFD performance targets.
+  8. synthesize_gencad_script: GenCAD parameter synthesis and OpenSCAD/build123d script export conditioned on CFD targets.
+  9. retrieve_cad_from_image: GenCAD cross-modal vision retrieval of CAD programs matching 2D render image.
+ 10. generate_cad_from_image: GenCAD cross-modal synthesis generating CAD AST script directly conditioned on 2D image.
+ 11. sample_diverse_cad_programs: GenCAD latent diffusion sampler generating N diverse CAD sequence variations.
 """
 
 import os
@@ -23,6 +28,7 @@ from surrogate_gradients import DifferentiableInverseDesigner
 from pinn_conservation import PhysicsConservationEnforcer
 from async_solver_queue import AsyncSolverQueue
 from parameter_validator import validate_parameters
+from gencad_driver import GenCADDriver
 
 
 # =====================================================================
@@ -162,6 +168,122 @@ CAD_TOOLS_SCHEMA = [
                 "required": ["params"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_cad_from_physics_target",
+            "description": "GenCAD retrieval tool that queries nearest parametric CAD programs in latent space given a CFD physics target profile.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "physics_target": {
+                        "type": "object",
+                        "description": "Target physics feature dictionary e.g. {'delta_p': 2500, 'separation_efficiency': 95}."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of top matching CAD designs to return.",
+                        "default": 3
+                    }
+                },
+                "required": ["physics_target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "synthesize_gencad_script",
+            "description": "GenCAD generative tool that synthesizes parametric CAD code (OpenSCAD or build123d) directly conditioned on a target CFD performance profile.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "physics_target": {
+                        "type": "object",
+                        "description": "Target physics feature dictionary e.g. {'delta_p': 2500, 'separation_efficiency': 95}."
+                    },
+                    "format_type": {
+                        "type": "string",
+                        "enum": ["openscad", "build123d"],
+                        "default": "build123d"
+                    },
+                    "filename_prefix": {
+                        "type": "string",
+                        "default": "gencad_synthesized"
+                    }
+                },
+                "required": ["physics_target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_cad_from_image",
+            "description": "GenCAD cross-modal vision tool that queries nearest CAD programs matching a 2D CAD render or STL wireframe image.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to 2D image or 3D STL file to render and encode."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "default": 3
+                    }
+                },
+                "required": ["image_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_cad_from_image",
+            "description": "GenCAD cross-modal vision tool that generates executable build123d/OpenSCAD script directly conditioned on a 2D CAD image projection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to 2D image or STL file."
+                    },
+                    "format_type": {
+                        "type": "string",
+                        "enum": ["openscad", "build123d"],
+                        "default": "build123d"
+                    }
+                },
+                "required": ["image_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sample_diverse_cad_programs",
+            "description": "GenCAD latent diffusion sampler tool that generates N diverse CAD sequence program variations for a target CFD physics profile.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "physics_target": {
+                        "type": "object",
+                        "description": "Target physics feature dictionary e.g. {'delta_p': 2500, 'separation_efficiency': 95}."
+                    },
+                    "n_samples": {
+                        "type": "integer",
+                        "default": 3
+                    },
+                    "temperature": {
+                        "type": "number",
+                        "default": 0.8
+                    }
+                },
+                "required": ["physics_target"]
+            }
+        }
     }
 ]
 
@@ -209,6 +331,9 @@ class CADAgentToolRegistry:
         # 4. Async Queue
         self.async_queue = async_queue or AsyncSolverQueue(max_workers=2, verbose=False)
         self.driver = driver
+
+        # 5. GenCAD Driver
+        self.gencad_driver = GenCADDriver()
 
     def _create_default_surrogate(self) -> MultiPhysicsSurrogate:
         """Initializes a baseline surrogate with calibrated training points."""
@@ -271,6 +396,16 @@ class CADAgentToolRegistry:
                 return self._tool_check_simulation_status(arguments)
             elif name == "generate_scad_code":
                 return self._tool_generate_scad_code(arguments)
+            elif name == "retrieve_cad_from_physics_target":
+                return self._tool_retrieve_cad_from_physics_target(arguments)
+            elif name == "synthesize_gencad_script":
+                return self._tool_synthesize_gencad_script(arguments)
+            elif name == "retrieve_cad_from_image":
+                return self._tool_retrieve_cad_from_image(arguments)
+            elif name == "generate_cad_from_image":
+                return self._tool_generate_cad_from_image(arguments)
+            elif name == "sample_diverse_cad_programs":
+                return self._tool_sample_diverse_cad_programs(arguments)
             else:
                 return {"error": f"Unknown tool: '{name}'"}
         except Exception as e:
@@ -441,6 +576,57 @@ union() {{
             "file_size_bytes": len(scad_code),
             "parameters_used": params,
             "message": f"OpenSCAD code successfully generated and saved to {filepath}"
+        }
+
+    def _tool_retrieve_cad_from_physics_target(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        physics_target = args.get("physics_target", {})
+        top_k = args.get("top_k", 3)
+        matches = self.gencad_driver.retrieve_cad_program(physics_target, top_k=top_k)
+        return {
+            "status": "success",
+            "physics_target": physics_target,
+            "matches": matches
+        }
+
+    def _tool_synthesize_gencad_script(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        physics_target = args.get("physics_target", {})
+        format_type = args.get("format_type", "build123d")
+        prefix = args.get("filename_prefix", "gencad_synthesized")
+
+        res = self.gencad_driver.generate_and_export(
+            physics_target=physics_target,
+            output_dir=self.artifacts_dir,
+            filename_prefix=prefix,
+            format_type=format_type
+        )
+        return res
+
+    def _tool_retrieve_cad_from_image(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        img_path = args.get("image_path")
+        top_k = args.get("top_k", 3)
+        matches = self.gencad_driver.retrieve_cad_from_image(img_path, top_k=top_k)
+        return {
+            "status": "success",
+            "image_path": img_path,
+            "matches": matches
+        }
+
+    def _tool_generate_cad_from_image(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        img_path = args.get("image_path")
+        fmt = args.get("format_type", "build123d")
+        res = self.gencad_driver.generate_cad_from_image(img_path, format_type=fmt)
+        return res
+
+    def _tool_sample_diverse_cad_programs(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        p_target = args.get("physics_target", {})
+        n = args.get("n_samples", 3)
+        temp = args.get("temperature", 0.8)
+        samples = self.gencad_driver.sample_diverse_cad_programs(p_target, n_samples=n, temperature=temp)
+        return {
+            "status": "success",
+            "physics_target": p_target,
+            "n_samples": len(samples),
+            "samples": samples
         }
 
 
