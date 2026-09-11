@@ -26,6 +26,9 @@ corkscrewFilter/[0.1-0.9]*
 # Ignore Mintty terminal screenshots
 mintty*.png
 
+# Ignore generated test/simulation artifacts
+artifacts/
+
 # Ignore VTK visualization files
 corkscrewFilter/VTK/
 

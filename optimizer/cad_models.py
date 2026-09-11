@@ -36,7 +36,7 @@ def build_helical_shape(h, twist_deg, path_r, profile_r, scale_ratio=1.0, hollow
                     b3d.Ellipse(profile_r, profile_r * scale_ratio)
                 with b3d.Locations((path_r / 2, 0)):
                     b3d.Rectangle(path_r, profile_r)
-                if hollow_inner_r is not None:
+                if hollow_inner_r is not None and hollow_inner_r < profile_r:
                     with b3d.Locations((path_r, 0)):
                         b3d.Ellipse(hollow_inner_r, hollow_inner_r * scale_ratio, mode=b3d.Mode.SUBTRACT)
             b3d.extrude(amount=h, centered=True)
@@ -71,7 +71,7 @@ def build_helical_shape(h, twist_deg, path_r, profile_r, scale_ratio=1.0, hollow
             b3d.Ellipse(profile_r, profile_r * scale_ratio)
             with b3d.Locations((-path_r / 2, 0)):
                 b3d.Rectangle(path_r, profile_r)
-            if hollow_inner_r is not None:
+            if hollow_inner_r is not None and hollow_inner_r < profile_r:
                 b3d.Ellipse(hollow_inner_r, hollow_inner_r * scale_ratio, mode=b3d.Mode.SUBTRACT)
 
         b3d.sweep(sections=s.sketch, path=helix)
