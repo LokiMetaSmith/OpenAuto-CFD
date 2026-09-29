@@ -17,7 +17,11 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from typing import Dict, Any, Optional, Tuple
 
-# Ensure optimizer is importable
+# Ensure viewer and optimizer are importable
+VIEWER_DIR = os.path.dirname(os.path.abspath(__file__))
+if VIEWER_DIR not in sys.path:
+    sys.path.insert(0, VIEWER_DIR)
+
 OPTIMIZER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "optimizer"))
 if OPTIMIZER_DIR not in sys.path:
     sys.path.insert(0, OPTIMIZER_DIR)
@@ -134,10 +138,17 @@ try:
 except ImportError:
     from viewer.project_engine import ProjectManager
 
+try:
+    from samara_hardware_driver import SamaraHardwareDriver
+except ImportError:
+    try:
+        from optimizer.samara_hardware_driver import SamaraHardwareDriver
+    except ImportError:
+        SamaraHardwareDriver = None
 
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
-DEFAULT_BOARD_PATH = r"C:\Users\Loki-VR\Documents\projects\Daemon Pore\daemon-pore\Amplifier\amplifier.kicad_pcb"
+DEFAULT_BOARD_PATH = None
 
 
 
@@ -649,7 +660,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/project/harness":
             query = urllib.parse.parse_qs(parsed.query)
-            proj_id = query.get("project_id", [None])[0] or "daemon-pore"
+            proj_id = query.get("project_id", [None])[0] or (self.project_manager.active_project_id if self.project_manager else "corkscrew-filter")
             h_type = query.get("type", ["electrical"])[0]
             try:
                 we = get_wireviz_engine()
@@ -660,7 +671,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/harness/export":
             query = urllib.parse.parse_qs(parsed.query)
-            proj_id = query.get("project_id", [None])[0] or "daemon-pore"
+            proj_id = query.get("project_id", [None])[0] or (self.project_manager.active_project_id if self.project_manager else "corkscrew-filter")
             h_type = query.get("type", ["electrical"])[0]
             fmt = query.get("format", ["svg"])[0].lower()
             try:
@@ -835,6 +846,200 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                 "status": "success",
                 "physics_target": {"delta_p": dp, "separation_efficiency": eff},
                 "samples": samples
+            })
+
+        elif path == "/api/photonic/meep_simulate":
+            from meep_driver import MeepDriver
+            query = urllib.parse.parse_qs(parsed.query)
+            geom_type = query.get("geometry", ["waveguide"])[0]
+            wl_min = float(query.get("wl_min", [1.4])[0])
+            wl_max = float(query.get("wl_max", [1.7])[0])
+            w_um = float(query.get("width", [0.5])[0])
+            r_um = float(query.get("ring_r", [3.0])[0])
+            gap_um = float(query.get("ring_gap", [0.15])[0])
+            pore_nm = float(query.get("pore_diam", [120.0])[0])
+
+            case_dir = os.path.join("artifacts", "photonic_meep_hud")
+            driver = MeepDriver(
+                case_dir=case_dir,
+                config={
+                    "meep": {
+                        "geometry_type": geom_type,
+                        "wavelength_min_um": wl_min,
+                        "wavelength_max_um": wl_max,
+                        "waveguide_width_um": w_um,
+                        "ring_radius_um": r_um,
+                        "ring_gap_um": gap_um,
+                        "pore_diam_nm": pore_nm
+                    }
+                }
+            )
+            driver.prepare_case()
+            driver.run_meshing()
+            success = driver.run_solver()
+            metrics = driver.get_metrics()
+            spectrum = driver.get_spectrum()
+            vtk_dir = driver.generate_vtk()
+            self._send_json({
+                "status": "success" if success else "failed",
+                "solver": "Meep_FDTD",
+                "geometry_type": geom_type,
+                "metrics": metrics,
+                "spectrum": spectrum,
+                "vtk_dir": vtk_dir
+            })
+
+        elif path == "/api/photonic/s4_simulate":
+            from s4_driver import S4Driver
+            query = urllib.parse.parse_qs(parsed.query)
+            lattice_p = float(query.get("lattice_period", [0.8])[0])
+            num_h = int(query.get("harmonics", [49])[0])
+            wl_min = float(query.get("wl_min", [0.7])[0])
+            wl_max = float(query.get("wl_max", [1.6])[0])
+            t_um = float(query.get("thickness", [0.22])[0])
+            hole_r = float(query.get("hole_r", [0.18])[0])
+            pol = query.get("polarization", ["TE"])[0]
+
+            case_dir = os.path.join("artifacts", "photonic_s4_hud")
+            driver = S4Driver(
+                case_dir=case_dir,
+                config={
+                    "s4": {
+                        "lattice_period_um": lattice_p,
+                        "num_harmonics": num_h,
+                        "wavelength_min_um": wl_min,
+                        "wavelength_max_um": wl_max,
+                        "slab_thickness_um": t_um,
+                        "hole_radius_um": hole_r,
+                        "polarization": pol
+                    }
+                }
+            )
+            driver.prepare_case()
+            driver.run_meshing()
+            success = driver.run_solver()
+            metrics = driver.get_metrics()
+            spectrum = driver.get_spectrum()
+            vtk_dir = driver.generate_vtk()
+            self._send_json({
+                "status": "success" if success else "failed",
+                "solver": "S4_RCWA",
+                "metrics": metrics,
+                "spectrum": spectrum,
+                "vtk_dir": vtk_dir
+            })
+
+        elif path == "/api/samara/simulate_board":
+            query = urllib.parse.parse_qs(parsed.query)
+            freq_mhz = float(query.get("freq_mhz", [3.0])[0])
+            phase_current = float(query.get("phase_current", [1.5])[0])
+            er = float(query.get("er", [4.3])[0])
+            h_mm = float(query.get("h_mm", [1.6])[0])
+            cu_um = float(query.get("cu_um", [35.0])[0])
+
+            proj_dir = None
+            if self.project_manager:
+                active_p = self.project_manager.get_active_project()
+                if active_p:
+                    proj_dir = active_p.project_dir
+
+            driver = SamaraHardwareDriver(proj_dir) if SamaraHardwareDriver else None
+            if not driver:
+                self._send_json({"error": "SamaraHardwareDriver unavailable"}, 500)
+                return
+
+            res = driver.simulate_circuit_board(
+                freq_mhz=freq_mhz,
+                phase_current_arms=phase_current,
+                copper_thickness_um=cu_um,
+                substrate_er=er,
+                substrate_height_mm=h_mm
+            )
+            self._send_json(res)
+
+        elif path == "/api/samara/simulate_impeller":
+            query = urllib.parse.parse_qs(parsed.query)
+            rpm = float(query.get("rpm", [6393.0])[0])
+            r2_mm = float(query.get("r2_mm", [65.0])[0])
+            b2_mm = float(query.get("b2_mm", [18.0])[0])
+            z_blades = int(query.get("blades", [12])[0])
+            beta_deg = float(query.get("sweep_deg", [30.0])[0])
+            rho = float(query.get("density", [1.225])[0])
+            l_duct = float(query.get("duct_len_mm", [350.0])[0])
+            dh_duct = float(query.get("duct_dh_mm", [13.5])[0])
+
+            driver = SamaraHardwareDriver() if SamaraHardwareDriver else None
+            if not driver:
+                self._send_json({"error": "SamaraHardwareDriver unavailable"}, 500)
+                return
+
+            res = driver.simulate_impeller_airflow(
+                rpm=rpm,
+                impeller_radius_mm=r2_mm,
+                blade_height_mm=b2_mm,
+                blade_count=z_blades,
+                backward_sweep_deg=beta_deg,
+                air_density=rho,
+                duct_length_mm=l_duct,
+                duct_hydraulic_diam_mm=dh_duct
+            )
+            self._send_json(res)
+
+        elif path == "/api/samara/simulate_wing":
+            query = urllib.parse.parse_qs(parsed.query)
+            p_nozzle = float(query.get("nozzle_press_pa", [1022.0])[0])
+            m_dot = float(query.get("mass_flow_g_s", [18.45])[0])
+            span_mm = float(query.get("span_mm", [415.0])[0])
+            root_c = float(query.get("root_chord_mm", [90.0])[0])
+            tip_c = float(query.get("tip_chord_mm", [25.0])[0])
+            mass_g = float(query.get("mass_grams", [380.0])[0])
+            rho = float(query.get("density", [1.225])[0])
+
+            driver = SamaraHardwareDriver() if SamaraHardwareDriver else None
+            if not driver:
+                self._send_json({"error": "SamaraHardwareDriver unavailable"}, 500)
+                return
+
+            res = driver.simulate_wing_velocity(
+                nozzle_press_gauge_pa=p_nozzle,
+                mass_flow_per_wing_g_s=m_dot,
+                span_length_mm=span_mm,
+                root_chord_mm=root_c,
+                tip_chord_mm=tip_c,
+                vehicle_mass_grams=mass_g,
+                air_density=rho
+            )
+            self._send_json(res)
+
+        elif path == "/api/samara/simulate_all":
+            query = urllib.parse.parse_qs(parsed.query)
+            rpm = float(query.get("rpm", [6393.0])[0])
+            freq_mhz = float(query.get("freq_mhz", [3.0])[0])
+            phase_current = float(query.get("phase_current", [1.5])[0])
+
+            proj_dir = None
+            if self.project_manager:
+                active_p = self.project_manager.get_active_project()
+                if active_p:
+                    proj_dir = active_p.project_dir
+
+            driver = SamaraHardwareDriver(proj_dir) if SamaraHardwareDriver else None
+            if not driver:
+                self._send_json({"error": "SamaraHardwareDriver unavailable"}, 500)
+                return
+
+            board_res = driver.simulate_circuit_board(freq_mhz=freq_mhz, phase_current_arms=phase_current)
+            airflow_res = driver.simulate_impeller_airflow(rpm=rpm)
+            net_p = airflow_res["internal_wing_duct_fanno_flow"]["net_nozzle_pressure_gauge_pa"]
+            m_dot = airflow_res["central_plenum"]["mass_flow_per_wing_g_s"]
+            wing_res = driver.simulate_wing_velocity(nozzle_press_gauge_pa=net_p, mass_flow_per_wing_g_s=m_dot)
+
+            self._send_json({
+                "status": "success",
+                "vehicle": "Samara Feather",
+                "circuit_board": board_res,
+                "impeller_airflow": airflow_res,
+                "wing_tip_velocity": wing_res
             })
 
         else:
@@ -1108,7 +1313,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
             if not board_path:
                 if MultiPhysicsViewerHandler.kicad_state:
                     board_path = MultiPhysicsViewerHandler.kicad_state.get("board_path")
-                if not board_path and os.path.exists(DEFAULT_BOARD_PATH):
+                if not board_path and DEFAULT_BOARD_PATH and os.path.exists(DEFAULT_BOARD_PATH):
                     board_path = DEFAULT_BOARD_PATH
 
             net_name = payload.get("net_name", "/Signal_AMP")
@@ -1148,7 +1353,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
             if not board_path:
                 if MultiPhysicsViewerHandler.kicad_state:
                     board_path = MultiPhysicsViewerHandler.kicad_state.get("board_path")
-                if not board_path and os.path.exists(DEFAULT_BOARD_PATH):
+                if not board_path and DEFAULT_BOARD_PATH and os.path.exists(DEFAULT_BOARD_PATH):
                     board_path = DEFAULT_BOARD_PATH
 
             if not board_path or not os.path.exists(board_path):
@@ -1199,7 +1404,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/harness/render":
             yaml_txt = payload.get("yaml", "")
-            proj_id = payload.get("project_id", "daemon-pore")
+            proj_id = payload.get("project_id") or (self.project_manager.active_project_id if self.project_manager else "corkscrew-filter")
             h_type = payload.get("type", "electrical")
             try:
                 we = get_wireviz_engine()
@@ -1212,7 +1417,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/project/harness/save":
             yaml_txt = payload.get("yaml", "")
-            proj_id = payload.get("project_id", "daemon-pore")
+            proj_id = payload.get("project_id") or (self.project_manager.active_project_id if self.project_manager else "corkscrew-filter")
             h_type = payload.get("type", "electrical")
             if not yaml_txt:
                 self._send_json({"error": "Missing yaml content"}, 400)
@@ -1226,7 +1431,7 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
 
         elif path == "/api/harness/export":
             yaml_txt = payload.get("yaml", "")
-            proj_id = payload.get("project_id", "daemon-pore")
+            proj_id = payload.get("project_id") or (self.project_manager.active_project_id if self.project_manager else "corkscrew-filter")
             h_type = payload.get("type", "electrical")
             fmt = payload.get("format", "svg").lower()
             try:
@@ -1276,6 +1481,80 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                 "status": "success",
                 "physics_target": {"delta_p": dp, "separation_efficiency": eff},
                 "samples": samples
+            })
+
+        elif path == "/api/photonic/simulate":
+            solver_type = payload.get("solver", "meep").lower()
+            cfg = payload.get("config", {})
+            if solver_type in ("s4", "rcwa"):
+                from s4_driver import S4Driver
+                case_dir = os.path.join("artifacts", "photonic_s4_post")
+                driver = S4Driver(case_dir=case_dir, config={"s4": cfg})
+            else:
+                from meep_driver import MeepDriver
+                case_dir = os.path.join("artifacts", "photonic_meep_post")
+                driver = MeepDriver(case_dir=case_dir, config={"meep": cfg})
+
+            driver.prepare_case()
+            driver.run_meshing()
+            success = driver.run_solver()
+            metrics = driver.get_metrics()
+            spectrum = driver.get_spectrum()
+            vtk_dir = driver.generate_vtk()
+            self._send_json({
+                "status": "success" if success else "failed",
+                "solver": solver_type,
+                "metrics": metrics,
+                "spectrum": spectrum,
+                "vtk_dir": vtk_dir
+            })
+
+        elif path == "/api/project/import":
+            pm = self.project_manager
+            if not pm:
+                self._send_json({"error": "Project manager uninitialized"}, 500)
+                return
+            p_dir = payload.get("project_dir")
+            p_name = payload.get("name")
+            p_id = payload.get("project_id")
+            if not p_dir:
+                self._send_json({"error": "Missing 'project_dir' parameter"}, 400)
+                return
+            try:
+                res = pm.import_project(project_dir=p_dir, name=p_name, project_id=p_id)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, 500)
+
+        elif path == "/api/hardware/simulate":
+            hw_type = payload.get("hardware_type", "samara").lower()
+            proj_dir = payload.get("project_dir")
+            if not proj_dir and self.project_manager:
+                active_p = self.project_manager.get_active_project()
+                if active_p:
+                    proj_dir = active_p.project_dir
+
+            driver = SamaraHardwareDriver(proj_dir) if SamaraHardwareDriver else None
+            if not driver:
+                self._send_json({"error": "SamaraHardwareDriver unavailable"}, 500)
+                return
+
+            freq_mhz = float(payload.get("freq_mhz", 3.0))
+            phase_curr = float(payload.get("phase_current", 1.5))
+            rpm = float(payload.get("rpm", 6393.0))
+
+            board_res = driver.simulate_circuit_board(freq_mhz=freq_mhz, phase_current_arms=phase_curr)
+            airflow_res = driver.simulate_impeller_airflow(rpm=rpm)
+            net_p = airflow_res["internal_wing_duct_fanno_flow"]["net_nozzle_pressure_gauge_pa"]
+            m_dot = airflow_res["central_plenum"]["mass_flow_per_wing_g_s"]
+            wing_res = driver.simulate_wing_velocity(nozzle_press_gauge_pa=net_p, mass_flow_per_wing_g_s=m_dot)
+
+            self._send_json({
+                "status": "success",
+                "hardware_type": hw_type,
+                "circuit_board": board_res,
+                "impeller_airflow": airflow_res,
+                "wing_tip_velocity": wing_res
             })
 
         else:
@@ -1339,15 +1618,16 @@ def create_server(
             print(f"[ViewerServer] ProjectManager active: '{proj_name}' (board: '{board_id}')")
     except Exception as e:
         print(f"[ViewerServer] ProjectManager initialization note: {e}")
-        if MultiPhysicsViewerHandler.kicad_state is None and os.path.exists(DEFAULT_BOARD_PATH):
+        board_p = pm.get_active_board_path() if 'pm' in locals() and pm else None
+        if MultiPhysicsViewerHandler.kicad_state is None and board_p and os.path.exists(board_p):
             try:
                 from em_live_watcher import EMLiveSyncDaemon
-                daemon = EMLiveSyncDaemon(DEFAULT_BOARD_PATH, server_url=f"http://127.0.0.1:{port}")
+                daemon = EMLiveSyncDaemon(board_p, server_url=f"http://127.0.0.1:{port}")
                 sync_data = daemon.trigger_sync()
                 if sync_data:
                     MultiPhysicsViewerHandler.kicad_state = sync_data
                     MultiPhysicsViewerHandler.kicad_state["connected"] = True
-                    print(f"[ViewerServer] Pre-loaded KiCad board state from {DEFAULT_BOARD_PATH}")
+                    print(f"[ViewerServer] Pre-loaded KiCad board state from {board_p}")
             except Exception as ex:
                 print(f"[ViewerServer] KiCad fallback sync note: {ex}")
 

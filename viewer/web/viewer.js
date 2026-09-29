@@ -341,7 +341,7 @@ async function fetchBuild123dPartGeometry(partId, tolerance = 0.1, forceRefresh 
   const cacheKey = `b123d_${partId}_tol_${tolerance}`;
   if (!forceRefresh && daemonCadCache[cacheKey]) return daemonCadCache[cacheKey];
   try {
-    const res = await fetch(`/api/project/build123d_part?project_id=daemon-pore&part_id=${partId}&tolerance=${tolerance}&_t=${Date.now()}`);
+    const res = await fetch(`/api/project/build123d_part?project_id=${encodeURIComponent(currentProjectId)}&part_id=${partId}&tolerance=${tolerance}&_t=${Date.now()}`);
     if (!res.ok) {
       console.warn(`Build123d part fetch failed for ${partId}:`, res.statusText);
       return null;
@@ -362,7 +362,7 @@ async function fetchBuild123dPartGeometry(partId, tolerance = 0.1, forceRefresh 
 async function fetchPartMeshGeometry(partId) {
   if (daemonCadCache[partId]) return daemonCadCache[partId];
   try {
-    const res = await fetch(`/api/project/mesh_binary?project_id=daemon-pore&part_id=${partId}`);
+    const res = await fetch(`/api/project/mesh_binary?project_id=${encodeURIComponent(currentProjectId)}&part_id=${partId}`);
     if (!res.ok) {
       console.warn(`Mesh binary fetch failed for ${partId}:`, res.statusText);
       return null;
@@ -384,7 +384,7 @@ async function fetchDxfExtrudedGeometry(partId, thickness = 4.0) {
   const cacheKey = `${partId}_thick_${thickness}`;
   if (daemonCadCache[cacheKey]) return daemonCadCache[cacheKey];
   try {
-    const res = await fetch(`/api/project/dxf_polylines?project_id=daemon-pore&part_id=${partId}`);
+    const res = await fetch(`/api/project/dxf_polylines?project_id=${encodeURIComponent(currentProjectId)}&part_id=${partId}`);
     if (!res.ok) {
       console.warn(`DXF fetch failed for ${partId}:`, res.statusText);
       return null;
@@ -796,7 +796,7 @@ async function loadDaemonPoreGeometry(mode = "cartridge") {
 
   // 1. Fetch live parametric assembly manifest directly from build123d engine
   try {
-    const res = await fetch(`/api/project/build123d_assembly?project_id=daemon-pore&mode=${mode}&explode=${daemonExplodeGap}&_t=${Date.now()}`);
+    const res = await fetch(`/api/project/build123d_assembly?project_id=${encodeURIComponent(currentProjectId)}&mode=${mode}&explode=${daemonExplodeGap}&_t=${Date.now()}`);
     if (res.ok) {
       const manifest = await res.json();
       daemonAssemblyManifest = manifest;
@@ -2640,7 +2640,7 @@ async function sendAgentMessage() {
 }
 
 // --- Multiphysics Project & Board Management ---
-let currentProjectId = "daemon-pore";
+let currentProjectId = "corkscrew-filter";
 let currentBoardId = "amplifier";
 let projectManifestCache = {};
 
@@ -3056,6 +3056,22 @@ async function switchProject(projectId) {
     updateDaemonPoreTelemetry();
     updateClampingTorque(currentClampingTorque || 0.5);
     updateMicrofluidicFlowPhysics();
+  } else if (projectId === "corkscrew-filter") {
+    if (modeDropdown) modeDropdown.style.display = "none";
+    if (btnReloadCad) btnReloadCad.style.display = "none";
+    if (explodeContainer) explodeContainer.style.display = "none";
+    if (btnElectrophys) btnElectrophys.style.display = "none";
+    if (btnExportFab) btnExportFab.style.display = "none";
+    if (clampingPanel) clampingPanel.style.display = "none";
+    if (daemonPoreGroup) daemonPoreGroup.visible = false;
+    if (window.genericProjectCadGroup) window.genericProjectCadGroup.visible = false;
+    restoreCorkscrewTelemetryTitles();
+    buildParameterSliders();
+    if (currentDomain !== "pcb") {
+      if (corkscrewMesh) corkscrewMesh.visible = true;
+      updateCorkscrewGeometry(currentParams);
+      triggerPrediction();
+    }
   } else {
     if (modeDropdown) modeDropdown.style.display = "none";
     if (btnReloadCad) btnReloadCad.style.display = "none";
@@ -3064,13 +3080,8 @@ async function switchProject(projectId) {
     if (btnExportFab) btnExportFab.style.display = "none";
     if (clampingPanel) clampingPanel.style.display = "none";
     if (daemonPoreGroup) daemonPoreGroup.visible = false;
-    restoreCorkscrewTelemetryTitles();
-    buildParameterSliders();
-    if (currentDomain !== "pcb") {
-      if (corkscrewMesh) corkscrewMesh.visible = true;
-      updateCorkscrewGeometry(currentParams);
-      triggerPrediction();
-    }
+    if (corkscrewMesh) corkscrewMesh.visible = false;
+    loadGenericProjectCad(projectId);
   }
 
   try {
@@ -5058,7 +5069,7 @@ function triggerCadExport(spec) {
   const partId = parts[1];
 
   showKiCadToast(`💾 Exporting ${partId} as ${fmt.toUpperCase()}...`, 3000);
-  const downloadUrl = `/api/project/build123d_export?part_id=${encodeURIComponent(partId)}&format=${encodeURIComponent(fmt)}&project_id=daemon-pore`;
+  const downloadUrl = `/api/project/build123d_export?part_id=${encodeURIComponent(partId)}&format=${encodeURIComponent(fmt)}&project_id=${encodeURIComponent(currentProjectId)}`;
 
   const link = document.createElement("a");
   link.href = downloadUrl;
@@ -6197,7 +6208,7 @@ function drawKicadBodePlot(data) {
    ========================================================================= */
 
 let harnessStudioOpen = false;
-let currentHarnessProjectId = "daemon-pore";
+let currentHarnessProjectId = "corkscrew-filter";
 let currentHarnessType = "electrical";
 let harnessZoom = 1.0;
 let harnessPanX = 0;
@@ -6713,3 +6724,121 @@ function highlightInterconnectIn3D() {
     showKiCadToast("🔬 3D Viewport: System Interconnect highlighted!", 2500);
   }
 }
+
+
+// =====================================================================
+// Photonic Simulation & Spectrum Viewer (Meep FDTD & Stanford S4 RCWA)
+// =====================================================================
+let photonicSpectrumData = null;
+
+async function fetchMeepSimulation(params) {
+  params = params || {};
+  const query = new URLSearchParams({
+    geometry: params.geometry || "waveguide",
+    wl_min: params.wl_min || 1.4,
+    wl_max: params.wl_max || 1.7,
+    width: params.width || 0.5,
+    ring_r: params.ring_r || 3.0,
+    ring_gap: params.ring_gap || 0.15,
+    pore_diam: params.pore_diam || 120.0
+  });
+  try {
+    const res = await fetch(`/api/photonic/meep_simulate?${query.toString()}`);
+    const data = await res.json();
+    photonicSpectrumData = data;
+    console.log("[Photonic Meep] Simulation metrics:", data.metrics);
+    if (typeof showKiCadToast === "function") {
+      showKiCadToast(`✨ Meep FDTD: T=${(data.metrics.transmission * 100).toFixed(1)}%, Loss=${data.metrics.insertion_loss_db}dB, Q=${data.metrics.q_factor}`, 4000);
+    }
+    return data;
+  } catch (err) {
+    console.error("fetchMeepSimulation error:", err);
+    return null;
+  }
+}
+
+async function fetchS4Simulation(params) {
+  params = params || {};
+  const query = new URLSearchParams({
+    lattice_period: params.lattice_period || 0.8,
+    harmonics: params.harmonics || 49,
+    wl_min: params.wl_min || 0.7,
+    wl_max: params.wl_max || 1.6,
+    thickness: params.thickness || 0.22,
+    hole_r: params.hole_r || 0.18,
+    polarization: params.polarization || "TE"
+  });
+  try {
+    const res = await fetch(`/api/photonic/s4_simulate?${query.toString()}`);
+    const data = await res.json();
+    photonicSpectrumData = data;
+    console.log("[Photonic S4] Simulation metrics:", data.metrics);
+    if (typeof showKiCadToast === "function") {
+      showKiCadToast(`✨ S4 RCWA: T₀=${(data.metrics.zero_order_transmission * 100).toFixed(1)}%, Res=${data.metrics.resonant_wavelength_nm}nm, Q=${data.metrics.q_factor}`, 4000);
+    }
+    return data;
+  } catch (err) {
+    console.error("fetchS4Simulation error:", err);
+    return null;
+  }
+}
+
+window.fetchMeepSimulation = fetchMeepSimulation;
+window.fetchS4Simulation = fetchS4Simulation;
+
+
+// Generic Project CAD Loader for imported projects (e.g. Samara Feather)
+let genericProjectCadGroup = null;
+window.genericProjectCadGroup = null;
+
+async function loadGenericProjectCad(projectId) {
+  if (!window.scene) return;
+  if (!genericProjectCadGroup) {
+    genericProjectCadGroup = new THREE.Group();
+    genericProjectCadGroup.name = "genericProjectCadGroup";
+    scene.add(genericProjectCadGroup);
+    window.genericProjectCadGroup = genericProjectCadGroup;
+  }
+  while (genericProjectCadGroup.children.length > 0) {
+    const c = genericProjectCadGroup.children[0];
+    genericProjectCadGroup.remove(c);
+    if (c.geometry) c.geometry.dispose();
+  }
+  genericProjectCadGroup.visible = true;
+
+  const proj = projectManifestCache[projectId];
+  if (!proj || !proj.mechanical || !proj.mechanical.parts) return;
+
+  for (const part of proj.mechanical.parts) {
+    try {
+      const res = await fetch(`/api/project/mesh_binary?project_id=${encodeURIComponent(projectId)}&part_id=${encodeURIComponent(part.id)}`);
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      const floatArray = new Float32Array(buf);
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.BufferAttribute(floatArray, 3));
+      geom.computeVertexNormals();
+
+      const colorHex = part.color ? parseInt(part.color.replace("#", "0x")) : 0x60a5fa;
+      const mat = new THREE.MeshStandardMaterial({
+        color: colorHex,
+        roughness: 0.35,
+        metalness: 0.25,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.name = part.id;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      genericProjectCadGroup.add(mesh);
+    } catch (err) {
+      console.warn(`[ProjectCAD] Failed to render ${part.id}:`, err);
+    }
+  }
+  if (typeof showKiCadToast === "function") {
+    showKiCadToast(`🚀 3D CAD loaded for ${proj.name} (${proj.mechanical.parts.length} parts)`, 3500);
+  }
+}
+window.loadGenericProjectCad = loadGenericProjectCad;

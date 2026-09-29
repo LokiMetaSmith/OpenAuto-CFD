@@ -322,25 +322,39 @@ class WireVizEngine:
                 "cleaned_yaml": cleaned_yaml
             }
 
+    def _resolve_wiring_dir(self, project_id: str) -> str:
+        """Dynamically resolves wiring directory for a given project without hardcoded paths."""
+        try:
+            from server import MultiPhysicsViewerHandler
+            if MultiPhysicsViewerHandler.project_manager:
+                proj = MultiPhysicsViewerHandler.project_manager.projects.get(project_id)
+                if proj and os.path.exists(proj.project_dir):
+                    return os.path.join(proj.project_dir, "wiring")
+        except Exception:
+            pass
+
+        # Check default local wiring directory
+        local_wiring = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "wiring"))
+        return local_wiring
+
     def get_project_harness(self, project_id: str, harness_type: str = "electrical") -> str:
         """
         Retrieves project YAML harness from disk or built-in templates.
         """
-        # Determine candidate directory
-        if project_id == "daemon-pore":
-            base_dir = r"C:\Users\Loki-VR\Documents\projects\Daemon Pore\daemon-pore\wiring"
-            fn = "reader_wiring.yaml" if harness_type == "electrical" else "reader_tubing.yaml"
+        base_dir = self._resolve_wiring_dir(project_id)
+        if harness_type == "electrical":
+            cand_files = [f"{project_id}_wiring.yaml", "reader_wiring.yaml", "filter_interconnect.yaml", "wiring.yaml"]
         else:
-            base_dir = r"c:\Users\Loki-VR\Documents\projects\Corkscrew-Filter\wiring"
-            fn = "filter_interconnect.yaml"
+            cand_files = [f"{project_id}_tubing.yaml", "reader_tubing.yaml", "filter_tubing.yaml", "tubing.yaml"]
 
-        p = os.path.join(base_dir, fn)
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    return f.read()
-            except Exception as e:
-                print(f"[WireVizEngine] Error reading {p}: {e}")
+        for fn in cand_files:
+            p = os.path.join(base_dir, fn)
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        return f.read()
+                except Exception as e:
+                    print(f"[WireVizEngine] Error reading {p}: {e}")
 
         # Fallback default template
         return self.get_default_template(harness_type)
@@ -349,11 +363,11 @@ class WireVizEngine:
         """
         Saves updated YAML harness back to the project wiring directory.
         """
+        base_dir = self._resolve_wiring_dir(project_id)
+        fn = f"{project_id}_wiring.yaml" if harness_type == "electrical" else f"{project_id}_tubing.yaml"
         if project_id == "daemon-pore":
-            base_dir = r"C:\Users\Loki-VR\Documents\projects\Daemon Pore\daemon-pore\wiring"
             fn = "reader_wiring.yaml" if harness_type == "electrical" else "reader_tubing.yaml"
-        else:
-            base_dir = r"c:\Users\Loki-VR\Documents\projects\Corkscrew-Filter\wiring"
+        elif project_id == "corkscrew-filter":
             fn = "filter_interconnect.yaml"
 
         try:

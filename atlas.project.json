@@ -1,0 +1,60 @@
+{
+  "project_id": "corkscrew-filter",
+  "name": "Corkscrew Hydrodynamic Cyclone Separator",
+  "version": "2.4.0",
+  "description": "Multiphysics vortex micro-separator for continuous particle fractionation and clean bio-sample pre-filtering.",
+  "root_path": ".",
+  "active_board": "amplifier",
+  "boards": {
+    "amplifier": {
+      "name": "Daemon Pore LMP7721 Front-End",
+      "path": "../Daemon Pore/daemon-pore/Amplifier/amplifier.kicad_pcb",
+      "schematic_path": "../Daemon Pore/daemon-pore/Amplifier/amplifier.kicad_sch",
+      "role": "Analog Transimpedance Amplifier (TIA)",
+      "substrate": {
+        "material": "PTFE / Rogers RO4350B",
+        "er": 2.1,
+        "thickness_mm": 0.8
+      }
+    },
+    "mr1": {
+      "name": "Daemon Pore MR1 Motherboard",
+      "path": "../Daemon Pore/daemon-pore/MR1/MR1.kicad_pcb",
+      "schematic_path": "../Daemon Pore/daemon-pore/MR1/MR1.kicad_sch",
+      "role": "Digital MCU & Power Management",
+      "substrate": {
+        "material": "FR4 High-TG",
+        "er": 4.3,
+        "thickness_mm": 1.6
+      }
+    }
+  },
+  "mechanical": {
+    "cad_format": "OpenSCAD",
+    "parts": [
+      {
+        "id": "corkscrew_manifold",
+        "name": "Cyclone Filter Manifold",
+        "path": "cyclone_filter_manifold.scad",
+        "type": "manifold",
+        "color": "#3b82f6"
+      },
+      {
+        "id": "corkscrew_core",
+        "name": "Corkscrew Helical Separator",
+        "path": "corkscrew.scad",
+        "type": "separator",
+        "color": "#10b981"
+      }
+    ]
+  },
+  "fluidics": {
+    "inlet_flow_rate_ml_min": 1.2,
+    "vortex_reynolds_number": 840,
+    "cut_off_diameter_um": 2.5
+  },
+  "cosimulation": {
+    "enabled": true,
+    "linked_projects": ["daemon-pore"]
+  }
+}

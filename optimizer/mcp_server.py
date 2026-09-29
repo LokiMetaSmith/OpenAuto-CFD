@@ -308,7 +308,134 @@ def gencad_sample_diverse(
 
 
 @mcp.tool()
+def run_meep_simulation_tool(
+    geometry_type: str = "waveguide",
+    wavelength_min_um: float = 1.4,
+    wavelength_max_um: float = 1.7,
+    waveguide_width_um: float = 0.5,
+    ring_radius_um: float = 3.0,
+    ring_gap_um: float = 0.15,
+    pore_diam_nm: float = 120.0,
+    resolution: int = 20,
+    case_dir: str = "artifacts/meep_mcp"
+) -> Dict[str, Any]:
+    """
+    Execute a photonic FDTD electromagnetic simulation using Meep.
+
+    Args:
+        geometry_type: Structure topology ('waveguide', 'ring_resonator', 'nanopore_metasurface').
+        wavelength_min_um: Starting wavelength in microns (default: 1.4).
+        wavelength_max_um: Ending wavelength in microns (default: 1.7).
+        waveguide_width_um: Waveguide core width in microns (default: 0.5).
+        ring_radius_um: Ring resonator radius in microns (default: 3.0).
+        ring_gap_um: Coupling gap in microns (default: 0.15).
+        pore_diam_nm: Nanopore aperture diameter in nanometers (default: 120.0).
+        resolution: Spatial discretization resolution in pixels per micron (default: 20).
+        case_dir: Workspace directory for simulation files.
+
+    Returns:
+        Dict[str, Any]: Performance metrics (transmission, reflection, Q-factor, loss) and VTK field artifact paths.
+    """
+    from optimizer.meep_driver import MeepDriver
+    driver = MeepDriver(
+        case_dir=case_dir,
+        config={
+            "meep": {
+                "geometry_type": geometry_type,
+                "wavelength_min_um": wavelength_min_um,
+                "wavelength_max_um": wavelength_max_um,
+                "waveguide_width_um": waveguide_width_um,
+                "ring_radius_um": ring_radius_um,
+                "ring_gap_um": ring_gap_um,
+                "pore_diam_nm": pore_diam_nm,
+                "resolution": resolution
+            }
+        }
+    )
+    driver.prepare_case()
+    driver.run_meshing()
+    success = driver.run_solver()
+    metrics = driver.get_metrics()
+    spectrum = driver.get_spectrum()
+    vtk_path = driver.generate_vtk()
+
+    return {
+        "status": "success" if success else "failed",
+        "geometry_type": geometry_type,
+        "metrics": metrics,
+        "spectrum": {
+            "wavelength_nm": spectrum.get("wavelength_nm", [])[:20],
+            "transmission": spectrum.get("transmission", [])[:20],
+            "reflection": spectrum.get("reflection", [])[:20]
+        },
+        "vtk_path": vtk_path
+    }
+
+
+@mcp.tool()
+def run_s4_simulation_tool(
+    lattice_period_um: float = 0.8,
+    num_harmonics: int = 49,
+    wavelength_min_um: float = 0.7,
+    wavelength_max_um: float = 1.6,
+    slab_thickness_um: float = 0.22,
+    hole_radius_um: float = 0.18,
+    polarization: str = "TE",
+    case_dir: str = "artifacts/s4_mcp"
+) -> Dict[str, Any]:
+    """
+    Execute a photonic Rigorous Coupled-Wave Analysis (RCWA) simulation using Stanford S4.
+
+    Args:
+        lattice_period_um: Periodic lattice period in microns (default: 0.8).
+        num_harmonics: Number of Fourier basis harmonics (default: 49).
+        wavelength_min_um: Minimum spectral wavelength in microns (default: 0.7).
+        wavelength_max_um: Maximum spectral wavelength in microns (default: 1.6).
+        slab_thickness_um: Photonic crystal slab thickness in microns (default: 0.22).
+        hole_radius_um: Patterned hole / aperture radius in microns (default: 0.18).
+        polarization: Incident planewave polarization ('TE' or 'TM').
+        case_dir: Workspace directory for simulation files.
+
+    Returns:
+        Dict[str, Any]: Diffraction efficiencies, 0th-order spectra, resonance metrics, and VTK field artifact paths.
+    """
+    from optimizer.s4_driver import S4Driver
+    driver = S4Driver(
+        case_dir=case_dir,
+        config={
+            "s4": {
+                "lattice_period_um": lattice_period_um,
+                "num_harmonics": num_harmonics,
+                "wavelength_min_um": wavelength_min_um,
+                "wavelength_max_um": wavelength_max_um,
+                "slab_thickness_um": slab_thickness_um,
+                "hole_radius_um": hole_radius_um,
+                "polarization": polarization
+            }
+        }
+    )
+    driver.prepare_case()
+    driver.run_meshing()
+    success = driver.run_solver()
+    metrics = driver.get_metrics()
+    spectrum = driver.get_spectrum()
+    vtk_path = driver.generate_vtk()
+
+    return {
+        "status": "success" if success else "failed",
+        "metrics": metrics,
+        "spectrum": {
+            "wavelength_nm": spectrum.get("wavelength_nm", [])[:20],
+            "transmission_0th": spectrum.get("transmission_0th", [])[:20],
+            "diffraction_efficiency": spectrum.get("diffraction_efficiency", [])[:20]
+        },
+        "vtk_path": vtk_path
+    }
+
+
+@mcp.tool()
 def get_harness_status(db_path: str = "optimization_log.jsonl", top_k: int = 5) -> Dict[str, Any]:
+
     """
     Query the overall optimization harness history and top performing runs.
 

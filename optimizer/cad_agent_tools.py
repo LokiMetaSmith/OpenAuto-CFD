@@ -284,8 +284,52 @@ CAD_TOOLS_SCHEMA = [
                 "required": ["physics_target"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "simulate_meep_fdtd",
+            "description": "Simulates photonic electromagnetic wave propagation (waveguides, ring resonators, metasurface nanopores) using Meep FDTD.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "geometry_type": {
+                        "type": "string",
+                        "enum": ["waveguide", "ring_resonator", "nanopore_metasurface"],
+                        "default": "waveguide"
+                    },
+                    "wavelength_min_um": {"type": "number", "default": 1.4},
+                    "wavelength_max_um": {"type": "number", "default": 1.7},
+                    "waveguide_width_um": {"type": "number", "default": 0.5},
+                    "ring_radius_um": {"type": "number", "default": 3.0},
+                    "ring_gap_um": {"type": "number", "default": 0.15},
+                    "pore_diam_nm": {"type": "number", "default": 120.0},
+                    "resolution": {"type": "integer", "default": 20}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "simulate_s4_rcwa",
+            "description": "Simulates periodic photonic crystal slabs, gratings, and metasurfaces using Stanford S4 Rigorous Coupled-Wave Analysis (RCWA).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lattice_period_um": {"type": "number", "default": 0.8},
+                    "num_harmonics": {"type": "integer", "default": 49},
+                    "wavelength_min_um": {"type": "number", "default": 0.7},
+                    "wavelength_max_um": {"type": "number", "default": 1.6},
+                    "slab_thickness_um": {"type": "number", "default": 0.22},
+                    "hole_radius_um": {"type": "number", "default": 0.18},
+                    "polarization": {"type": "string", "enum": ["TE", "TM"], "default": "TE"}
+                }
+            }
+        }
     }
 ]
+
 
 
 # =====================================================================
@@ -406,8 +450,13 @@ class CADAgentToolRegistry:
                 return self._tool_generate_cad_from_image(arguments)
             elif name == "sample_diverse_cad_programs":
                 return self._tool_sample_diverse_cad_programs(arguments)
+            elif name == "simulate_meep_fdtd":
+                return self._tool_simulate_meep_fdtd(arguments)
+            elif name == "simulate_s4_rcwa":
+                return self._tool_simulate_s4_rcwa(arguments)
             else:
                 return {"error": f"Unknown tool: '{name}'"}
+
         except Exception as e:
             return {"error": f"Tool execution failed: {str(e)}"}
 
@@ -629,8 +678,51 @@ union() {{
             "samples": samples
         }
 
+    def _tool_simulate_meep_fdtd(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Runs Meep FDTD photonic simulation for waveguides, resonators, or metasurfaces."""
+        from meep_driver import MeepDriver
+        case_dir = os.path.join(self.artifacts_dir, "meep_case")
+        driver = MeepDriver(case_dir, config={"meep": args})
+        driver.prepare_case()
+        driver.run_meshing()
+        success = driver.run_solver()
+        metrics = driver.get_metrics()
+        spectrum = driver.get_spectrum()
+        vtk_path = driver.generate_vtk()
+        return {
+            "status": "success" if success else "failed",
+            "metrics": metrics,
+            "spectrum_sample": {
+                "wavelengths_nm": spectrum.get("wavelength_nm", [])[:15],
+                "transmission": spectrum.get("transmission", [])[:15]
+            },
+            "vtk_path": vtk_path
+        }
+
+    def _tool_simulate_s4_rcwa(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Runs S4 RCWA simulation for periodic stratified photonic structures."""
+        from s4_driver import S4Driver
+        case_dir = os.path.join(self.artifacts_dir, "s4_case")
+        driver = S4Driver(case_dir, config={"s4": args})
+        driver.prepare_case()
+        driver.run_meshing()
+        success = driver.run_solver()
+        metrics = driver.get_metrics()
+        spectrum = driver.get_spectrum()
+        vtk_path = driver.generate_vtk()
+        return {
+            "status": "success" if success else "failed",
+            "metrics": metrics,
+            "spectrum_sample": {
+                "wavelengths_nm": spectrum.get("wavelength_nm", [])[:15],
+                "transmission_0th": spectrum.get("transmission_0th", [])[:15]
+            },
+            "vtk_path": vtk_path
+        }
+
 
 # =====================================================================
+
 # Autonomous CAD Reasoning Agent (Tool-Calling Orchestrator)
 # =====================================================================
 

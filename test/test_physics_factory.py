@@ -9,6 +9,9 @@ from em_driver import OpenEMSDriver
 from fea_driver import FeaDriver
 from joint_driver import JointPhysicsDriver
 
+from meep_driver import MeepDriver
+from s4_driver import S4Driver
+
 def test_physics_factory_cfd():
     with tempfile.TemporaryDirectory() as td:
         driver = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'cfd'}})
@@ -29,7 +32,29 @@ def test_physics_factory_joint():
         driver = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'joint'}})
         assert isinstance(driver, JointPhysicsDriver)
 
+def test_physics_factory_meep():
+    with tempfile.TemporaryDirectory() as td:
+        driver = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'meep'}})
+        assert isinstance(driver, MeepDriver)
+        driver_fdtd = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'fdtd'}})
+        assert isinstance(driver_fdtd, MeepDriver)
+
+def test_physics_factory_s4():
+    with tempfile.TemporaryDirectory() as td:
+        driver = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 's4'}})
+        assert isinstance(driver, S4Driver)
+        driver_rcwa = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'rcwa'}})
+        assert isinstance(driver_rcwa, S4Driver)
+
+def test_physics_factory_photonic():
+    with tempfile.TemporaryDirectory() as td:
+        driver = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'photonic'}})
+        assert isinstance(driver, MeepDriver)
+        driver_s4 = PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'photonic'}, 'photonic': {'solver': 's4'}})
+        assert isinstance(driver_s4, S4Driver)
+
 def test_physics_factory_invalid():
     with tempfile.TemporaryDirectory() as td:
         with pytest.raises(ValueError):
             PhysicsEngineFactory.get_driver(td, {'physics': {'type': 'invalid_type'}})
+

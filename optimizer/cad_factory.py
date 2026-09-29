@@ -3,11 +3,18 @@ cad_factory.py
 Factory for creating CAD drivers (Build123dDriver vs ScadDriver).
 """
 
+import os
+import sys
+
+_opt_dir = os.path.dirname(os.path.abspath(__file__))
+if _opt_dir not in sys.path:
+    sys.path.insert(0, _opt_dir)
+
 try:
     from scad_driver import ScadDriver
 except ImportError:
     try:
-        from .scad_driver import ScadDriver
+        from optimizer.scad_driver import ScadDriver
     except ImportError:
         ScadDriver = None
 
@@ -15,7 +22,7 @@ try:
     from build123d_driver import Build123dDriver
 except ImportError:
     try:
-        from .build123d_driver import Build123dDriver
+        from optimizer.build123d_driver import Build123dDriver
     except ImportError:
         Build123dDriver = None
 

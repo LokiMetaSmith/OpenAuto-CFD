@@ -22,6 +22,68 @@ if KICAD_PLUGIN_DIR not in sys.path:
 from em_live_watcher import EMLiveSyncDaemon
 from eda_rf_driver import KiCadPcbExporter
 
+try:
+    from samara_hardware_driver import SamaraHardwareDriver
+except ImportError:
+    try:
+        from optimizer.samara_hardware_driver import SamaraHardwareDriver
+    except ImportError:
+        SamaraHardwareDriver = None
+
+
+def get_default_project_search_dirs() -> List[str]:
+    """
+    Dynamically identifies project search directories across any machine or OS.
+    Checks:
+    1. PROJECTS_DIR / OPENAUTO_PROJECTS_DIR environment variables
+    2. User's ~/Documents/projects and ~/projects
+    3. Parent directory of this repository (peer repos)
+    4. Current repository directory
+    5. Fallback paths if existing
+    """
+    dirs = []
+    # 1. Environment variables
+    for env_var in ["PROJECTS_DIR", "OPENAUTO_PROJECTS_DIR"]:
+        val = os.environ.get(env_var)
+        if val and os.path.isdir(val):
+            abs_p = os.path.abspath(val)
+            if abs_p not in dirs:
+                dirs.append(abs_p)
+
+    # 2. User home directories
+    try:
+        home = os.path.expanduser("~")
+        for cand in [
+            os.path.join(home, "Documents", "projects"),
+            os.path.join(home, "projects"),
+            os.path.join(home, "Documents"),
+        ]:
+            if os.path.isdir(cand):
+                abs_p = os.path.abspath(cand)
+                if abs_p not in dirs:
+                    dirs.append(abs_p)
+    except Exception:
+        pass
+
+    # 3. Known development paths (if existing on current machine)
+    for p in [r"C:\Users\Loki-VR\Documents\projects"]:
+        if os.path.isdir(p):
+            abs_p = os.path.abspath(p)
+            if abs_p not in dirs:
+                dirs.append(abs_p)
+
+    # 4. Parent directory of this repository (e.g. peer repositories)
+    repo_parent = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if os.path.isdir(repo_parent) and repo_parent not in dirs:
+        dirs.append(repo_parent)
+
+    # 5. This repository
+    repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if os.path.isdir(repo_dir) and repo_dir not in dirs:
+        dirs.append(repo_dir)
+
+    return dirs
+
 
 class MultiphysicsProject:
     """Represents a validated multi-disciplinary hardware project."""
@@ -81,7 +143,44 @@ class MultiphysicsProject:
                 "exists": os.path.exists(p_abs) if p_abs else False,
                 "color": p.get("color", "#60a5fa")
             })
+        if not resolved_parts and os.path.isdir(self.project_dir):
+            resolved_parts = self._auto_discover_mechanical_parts()
+
         self.mechanical_parts = resolved_parts
+
+    def _auto_discover_mechanical_parts(self) -> List[Dict[str, Any]]:
+        """Automatically scans project directory for 3D CAD files (.stl, .step)."""
+        discovered = []
+        palette = ["#60a5fa", "#34d399", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"]
+        cand_patterns = [
+            os.path.join(self.project_dir, "*.stl"),
+            os.path.join(self.project_dir, "*.step"),
+            os.path.join(self.project_dir, "build123d_output", "*.stl"),
+            os.path.join(self.project_dir, "build123d_output", "*.step"),
+            os.path.join(self.project_dir, "cad", "*.stl"),
+            os.path.join(self.project_dir, "cadquery_output", "*.stl"),
+        ]
+        seen_files = set()
+        for pat in cand_patterns:
+            for f in glob.glob(pat):
+                abs_f = os.path.abspath(f)
+                if abs_f in seen_files:
+                    continue
+                seen_files.add(abs_f)
+                rel_f = os.path.relpath(abs_f, self.project_dir).replace("\\", "/")
+                base_name = os.path.splitext(os.path.basename(abs_f))[0]
+                part_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_name.lower())
+                color = palette[len(discovered) % len(palette)]
+                discovered.append({
+                    "id": part_id,
+                    "name": base_name.replace("_", " ").title(),
+                    "type": "stl" if abs_f.lower().endswith(".stl") else "cad",
+                    "path": abs_f,
+                    "relative_path": rel_f,
+                    "exists": True,
+                    "color": color
+                })
+        return discovered
 
     def _load_manifest(self) -> Dict[str, Any]:
         try:
@@ -118,13 +217,11 @@ class ProjectManager:
     Central discovery, registry, and switching manager for projects and boards.
     """
 
-    DEFAULT_PROJECT_SEARCH_DIRS = [
-        r"C:\Users\Loki-VR\Documents\projects",
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
-    ]
+    DEFAULT_PROJECT_SEARCH_DIRS = get_default_project_search_dirs()
 
     def __init__(self, server_url: str = "http://127.0.0.1:8080"):
         self.server_url = server_url.rstrip("/")
+        self.search_dirs: List[str] = list(get_default_project_search_dirs())
         self.projects: Dict[str, MultiphysicsProject] = {}
         self.active_project_id: Optional[str] = None
         self.active_daemon: Optional[EMLiveSyncDaemon] = None
@@ -132,20 +229,35 @@ class ProjectManager:
 
         self.discover_projects()
 
-        # Prioritize Daemon Pore if available, otherwise Corkscrew Filter, or first discovered
-        if "daemon-pore" in self.projects:
-            self.active_project_id = "daemon-pore"
-        elif "corkscrew-filter" in self.projects:
+        # Prioritize Corkscrew Filter or first discovered project, then Daemon Pore
+        if "corkscrew-filter" in self.projects:
             self.active_project_id = "corkscrew-filter"
+        elif "daemon-pore" in self.projects:
+            self.active_project_id = "daemon-pore"
         elif self.projects:
             self.active_project_id = next(iter(self.projects.keys()))
 
-    def discover_projects(self) -> Dict[str, MultiphysicsProject]:
+    def add_search_dir(self, directory: str) -> bool:
+        """Adds a new directory to the project discovery path."""
+        if not directory or not os.path.isdir(directory):
+            return False
+        abs_dir = os.path.abspath(directory)
+        if abs_dir not in self.search_dirs:
+            self.search_dirs.insert(0, abs_dir)
+            self.discover_projects()
+            return True
+        return False
+
+    def discover_projects(self, additional_dirs: Optional[List[str]] = None) -> Dict[str, MultiphysicsProject]:
         """Scan candidate directories for openauto.project.json (or fallback atlas.project.json) files."""
         found = {}
         seen_dirs = set()
 
-        for search_dir in self.DEFAULT_PROJECT_SEARCH_DIRS:
+        all_dirs = list(self.search_dirs)
+        if additional_dirs:
+            all_dirs.extend(additional_dirs)
+
+        for search_dir in all_dirs:
             if not os.path.exists(search_dir):
                 continue
             abs_search = os.path.abspath(search_dir)
@@ -342,7 +454,9 @@ class ProjectManager:
 
         # Project Directory
         if not project_dir or not project_dir.strip():
-            project_dir = os.path.join(r"C:\Users\Loki-VR\Documents\projects", clean_name)
+            base_dir = self.search_dirs[0] if self.search_dirs else os.path.expanduser("~/Documents/projects")
+            os.makedirs(base_dir, exist_ok=True)
+            project_dir = os.path.join(base_dir, clean_name)
         project_dir = os.path.abspath(project_dir.strip())
         os.makedirs(project_dir, exist_ok=True)
 
@@ -372,6 +486,38 @@ class ProjectManager:
                 )
             except Exception as e:
                 print(f"[ProjectManager] Notice: Could not generate starter KiCad PCB: {e}")
+
+        # Auto-discover mechanical parts if none provided
+        if not mechanical_parts and os.path.isdir(project_dir):
+            palette = ["#60a5fa", "#34d399", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"]
+            cand_patterns = [
+                os.path.join(project_dir, "*.stl"),
+                os.path.join(project_dir, "*.step"),
+                os.path.join(project_dir, "build123d_output", "*.stl"),
+                os.path.join(project_dir, "build123d_output", "*.step"),
+                os.path.join(project_dir, "cad", "*.stl"),
+                os.path.join(project_dir, "cadquery_output", "*.stl"),
+            ]
+            discovered_parts = []
+            seen_files = set()
+            for pat in cand_patterns:
+                for f in glob.glob(pat):
+                    abs_f = os.path.abspath(f)
+                    if abs_f in seen_files:
+                        continue
+                    seen_files.add(abs_f)
+                    rel_f = os.path.relpath(abs_f, project_dir).replace("\\", "/")
+                    base_n = os.path.splitext(os.path.basename(abs_f))[0]
+                    pid = re.sub(r'[^a-zA-Z0-9_-]', '_', base_n.lower())
+                    color = palette[len(discovered_parts) % len(palette)]
+                    discovered_parts.append({
+                        "id": pid,
+                        "name": base_n.replace("_", " ").title(),
+                        "path": rel_f,
+                        "type": "stl" if abs_f.lower().endswith(".stl") else "step",
+                        "color": color
+                    })
+            mechanical_parts = discovered_parts
 
         # Construct openauto.project.json manifest
         manifest_data = {
@@ -408,6 +554,7 @@ class ProjectManager:
             json.dump(manifest_data, f, indent=2)
 
         # Re-discover projects and select newly created project
+        self.add_search_dir(project_dir)
         self.discover_projects()
         switch_res = self.select_project(project_id)
 
@@ -417,5 +564,180 @@ class ProjectManager:
             "project_dir": project_dir,
             "manifest_path": manifest_path,
             "active_project": self.projects[project_id].to_dict(),
+            "board_sync": switch_res.get("board_sync")
+        }
+
+    def import_project(
+        self,
+        project_dir: str,
+        name: Optional[str] = None,
+        project_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Imports an external directory into OpenAuto-CFD.
+        If openauto.project.json (or atlas.project.json) does not exist:
+          - Automatically scans for CAD parts (.stl, .step, .scad)
+          - Automatically scans for KiCad boards or footprints (.kicad_pcb, .kicad_mod)
+          - If a footprint or generator exists (e.g. Samara planar stator), synthesizes a board
+          - Generates openauto.project.json
+        Registers the project directory in search dirs, rediscovers, and activates it.
+        """
+        if not project_dir or not os.path.exists(project_dir):
+            raise ValueError(f"Project directory not found: '{project_dir}'")
+
+        project_dir = os.path.abspath(project_dir)
+        dir_basename = os.path.basename(project_dir)
+
+        # Detect project name
+        if not name:
+            readme_p = os.path.join(project_dir, "README.md")
+            if os.path.exists(readme_p):
+                try:
+                    with open(readme_p, "r", encoding="utf-8") as f:
+                        first_line = f.readline().strip()
+                        if first_line.startswith("#"):
+                            name = first_line.lstrip("#").split(":")[0].strip()
+                except Exception:
+                    pass
+        if not name:
+            name = dir_basename.replace("_", " ").replace("-", " ").title()
+
+        if not project_id:
+            project_id = re.sub(r'[^a-zA-Z0-9_-]', '-', name.lower()).strip('-')
+            if not project_id:
+                project_id = dir_basename.lower()
+
+        # Check for existing manifest
+        manifest_names = ["openauto.project.json", "atlas.project.json"]
+        existing_manifest = None
+        for mf in manifest_names:
+            p = os.path.join(project_dir, mf)
+            if os.path.exists(p):
+                existing_manifest = p
+                break
+
+        if not existing_manifest:
+            # Auto-discover CAD parts
+            palette = ["#60a5fa", "#34d399", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"]
+            cand_patterns = [
+                os.path.join(project_dir, "*.stl"),
+                os.path.join(project_dir, "*.step"),
+                os.path.join(project_dir, "build123d_output", "*.stl"),
+                os.path.join(project_dir, "build123d_output", "*.step"),
+                os.path.join(project_dir, "cad", "*.stl"),
+                os.path.join(project_dir, "cadquery_output", "*.stl"),
+            ]
+            discovered_parts = []
+            seen_files = set()
+            for pat in cand_patterns:
+                for f in glob.glob(pat):
+                    abs_f = os.path.abspath(f)
+                    if abs_f in seen_files:
+                        continue
+                    seen_files.add(abs_f)
+                    rel_f = os.path.relpath(abs_f, project_dir).replace("\\", "/")
+                    base_n = os.path.splitext(os.path.basename(abs_f))[0]
+                    pid = re.sub(r'[^a-zA-Z0-9_-]', '_', base_n.lower())
+                    color = palette[len(discovered_parts) % len(palette)]
+                    discovered_parts.append({
+                        "id": pid,
+                        "name": base_n.replace("_", " ").title(),
+                        "path": rel_f,
+                        "type": "stl" if abs_f.lower().endswith(".stl") else "step",
+                        "color": color
+                    })
+
+            # Auto-discover or synthesize KiCad boards
+            boards_dict = {}
+            kicad_pcb_files = glob.glob(os.path.join(project_dir, "*.kicad_pcb")) + \
+                              glob.glob(os.path.join(project_dir, "hardware", "*.kicad_pcb"))
+
+            if kicad_pcb_files:
+                for b_file in kicad_pcb_files:
+                    b_rel = os.path.relpath(b_file, project_dir).replace("\\", "/")
+                    b_id = os.path.splitext(os.path.basename(b_file))[0].lower().replace("_", "-")
+                    boards_dict[b_id] = {
+                        "name": b_id.replace("-", " ").title(),
+                        "path": b_rel,
+                        "role": "System Board",
+                        "substrate": {"material": "FR4 High-TG", "er": 4.3, "thickness_mm": 1.6}
+                    }
+            else:
+                # Check if Samara planar stator footprint exists
+                stator_mod = os.path.join(project_dir, "hardware", "planar_stator.kicad_mod")
+                if os.path.exists(stator_mod) or "samara" in project_id:
+                    stator_pcb_abs = os.path.join(project_dir, "hardware", "samara_stator.kicad_pcb")
+                    if SamaraHardwareDriver:
+                        driver = SamaraHardwareDriver(project_dir)
+                        driver.generate_samara_stator_pcb(stator_pcb_abs)
+                    else:
+                        KiCadPcbExporter.generate_kicad_pcb(0.25, 40.0, 40.0, 40.0, output_filepath=stator_pcb_abs)
+                    boards_dict["stator"] = {
+                        "name": "Planar Stator PCB",
+                        "path": "hardware/samara_stator.kicad_pcb",
+                        "role": "Multiphase Stator & Sensor PCB",
+                        "substrate": {"material": "FR4 High-TG", "er": 4.3, "thickness_mm": 1.6}
+                    }
+                else:
+                    starter_pcb = os.path.join(project_dir, "hardware", "board.kicad_pcb")
+                    KiCadPcbExporter.generate_kicad_pcb(0.35, 40.0, 35.0, 55.0, output_filepath=starter_pcb)
+                    boards_dict["main"] = {
+                        "name": "Main System PCB",
+                        "path": "hardware/board.kicad_pcb",
+                        "role": "System Board",
+                        "substrate": {"material": "FR4 High-TG", "er": 4.3, "thickness_mm": 1.6}
+                    }
+
+            active_b_id = next(iter(boards_dict.keys())) if boards_dict else "main"
+
+            manifest_data = {
+                "project_id": project_id,
+                "name": name,
+                "version": "1.0.0",
+                "description": f"{name} Multiphysics Project",
+                "root_path": ".",
+                "active_board": active_b_id,
+                "boards": boards_dict,
+                "mechanical": {
+                    "cad_format": "OpenSCAD / STL",
+                    "parts": discovered_parts
+                },
+                "fluidics": {},
+                "cosimulation": {
+                    "enabled": True
+                }
+            }
+
+            manifest_path = os.path.join(project_dir, "openauto.project.json")
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest_data, f, indent=2)
+
+        # Register search directory and reload
+        self.add_search_dir(project_dir)
+        parent_dir = os.path.dirname(project_dir)
+        if parent_dir:
+            self.add_search_dir(parent_dir)
+
+        self.discover_projects()
+
+        matched_id = None
+        for pid, proj in self.projects.items():
+            if os.path.abspath(proj.project_dir) == project_dir:
+                matched_id = pid
+                break
+
+        if not matched_id:
+            matched_id = project_id
+            if matched_id not in self.projects:
+                mf_file = os.path.join(project_dir, "openauto.project.json")
+                if os.path.exists(mf_file):
+                    self.projects[matched_id] = MultiphysicsProject(mf_file)
+
+        switch_res = self.select_project(matched_id)
+        return {
+            "success": True,
+            "project_id": matched_id,
+            "project_dir": project_dir,
+            "active_project": self.projects[matched_id].to_dict(),
             "board_sync": switch_res.get("board_sync")
         }
