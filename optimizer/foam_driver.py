@@ -13,10 +13,11 @@ from utils import run_command_with_spinner, safe_print, ProcessAbortedError
 from physics_driver import PhysicsDriver
 
 class FoamDriver(PhysicsDriver):
-    def __init__(self, case_dir, config=None, template_dir=None, container_engine="auto", num_processors=1, verbose=False, debug=False):
+    def __init__(self, case_dir, config=None, template_dir=None, container_engine="auto", num_processors=1, verbose=False, debug=False, template_kwargs=None):
         super().__init__(case_dir, config=config, container_engine=container_engine, verbose=verbose, debug=debug)
         self.template_dir = os.path.abspath(template_dir) if template_dir else os.path.abspath(case_dir)
         self.num_processors = num_processors
+        self.template_kwargs = template_kwargs or {}
 
         # Use a RAM disk (/dev/shm) or a temp directory for the case directory to prevent SSD wear and clutter
         import tempfile
@@ -1906,6 +1907,7 @@ cloudFunctions
             return False
 
     def _generate_surfaceFeatureExtractDict(self, unique_geometries):
+        included_angle = self.template_kwargs.get('includedAngle', 150)
         """
         Generates system/surfaceFeatureExtractDict using Jinja2 or direct formatting.
         """
@@ -1935,7 +1937,7 @@ FoamFile
 
     extractFromSurfaceCoeffs
     {{
-        includedAngle   150;
+        includedAngle   {included_angle};
     }}
 
     writeObj        true;
@@ -2029,7 +2031,8 @@ FoamFile
             add_layers=add_layers,
             geometries=geometries,
             unique_geometries=unique_geometries,
-            location_in_mesh=location_in_mesh
+            location_in_mesh=location_in_mesh,
+            **self.template_kwargs
         )
 
         # Restore preserved location

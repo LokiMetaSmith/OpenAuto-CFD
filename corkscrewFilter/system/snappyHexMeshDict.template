@@ -87,7 +87,7 @@ addLayersControls
     {
         "corkscrew.*"
         {
-            nSurfaceLayers 3;
+            nSurfaceLayers {{ nSurfaceLayers|default(3) }};
         }
     }
     expansionRatio 1.2;
@@ -118,14 +118,14 @@ meshQualityControls
 {
     nSmoothScale 4;
     errorReduction 0.75;
-    maxNonOrtho 75;
+    maxNonOrtho {{ maxNonOrtho|default(75) }};
     maxBoundarySkewness 30;
     maxInternalSkewness 4;
     maxConcave 80;
     minFlatness 0.5;
     minVol 1e-20;
     minTetQuality 1e-30;
-    minArea -1;
+    minArea {{ minArea|default(-1) }};
     minTwist 0.02;
     minDeterminant 0.001;
     minFaceWeight 0.05;
