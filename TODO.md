@@ -117,3 +117,13 @@ This section tracks necessary repository cleanup tasks to reorganize misplaced f
     - Many scripts in the root seem related to debugging or resolving specific issues (e.g., `fix_final_merge.py`, `fix_inletoutlet.py`, `fix_merge.py`, `investigate.py`, `resolve_conflicts.py`, `resolve_foam_driver.py`, `verify_fvschemes.py`, `verify_fvsolution.py`). Examine them carefully. If they are no longer needed, they can be deleted. If they still serve a purpose, consider moving them to a `scripts/` or `tools/` folder. Do not blindly delete files that are core recovery functionalities.
 - [x] **Group 4: Investigate Log Files in the Root Directory.**
     - Review `.pip_install.log` and `test_meshing3.log`. If they are not needed for reference, delete them or add them to `.gitignore` and untrack them from the repository to clean up the root folder.
+
+## Future Enhancements & Continuous Improvement
+- [ ] **Refactor `Build123dDriver` / `cad_models.py` for v0.13 API Changes:**
+    Recent updates to `build123d` (version 0.13.0) have modified how certain operations work (e.g., `Helix` isn't natively compatible inside `BuildPart` without conversion, causing `BuildPart doesn't have a Helix object or operation` errors). We need to refactor `cad_models.py` to ensure complete compatibility with the latest `build123d` API, such as sweeping a 2D sketch along a discrete `Curve` or `Edge` path.
+- [ ] **Migrate WASM OpenSCAD tests to Python / Native build123d:**
+    The tests `test_inlet_cap_repro_failure` and `test_outlet_cap_repro_failure` currently rely on `node export.js` which breaks due to missing NPM dependencies (`@scalenc/stl-to-png`). Since the framework successfully migrated to native Python `build123d`, the test suite should be updated to use `Build123dDriver` as the default testing engine, eliminating brittle Node.js dependencies.
+- [ ] **Implement Full System Integration Tests (Dry-Mesh Validation):**
+    Create an overarching integration test in the `test/` folder that specifically orchestrates the `DryMeshObjective` for a set of extreme geometries to guarantee the mesh classification (Good, Marginal, Bad) reliably prevents solver crashes in an automated CI environment without running expensive full physics solvers.
+- [ ] **Enhance LLM Surrogate Multi-Physics Backtesting Drift:**
+    Add a new `verify_surrogate_gradients.py` automated evaluation loop that periodically calculates the $L_2$ norm of the RBF surrogate error against the actual `OpenFOAM` ground truth found in `timeline.jsonl`. If the surrogate predictions drift above a 5% error margin over long inverse-design campaigns, it should trigger an automatic surrogate retrain.
