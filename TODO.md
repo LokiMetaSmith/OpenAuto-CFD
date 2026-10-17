@@ -82,7 +82,7 @@ This file tracks planned enhancements and future work for the OpenAuto-CFD frame
 - [x] **Radiation Pattern Visualization:** Add support for extracting and visualizing 3D far-field radiation patterns in Blender.
 
 ## CFD Resilient Execution Engine (Post-Review Architecture)
-- [ ] **Phase 1: Immediate Stability Fixes (Numerical Stability)**
+- [x] **Phase 1: Immediate Stability Fixes (Numerical Stability)**
     - [x] Fix `nut` invariant: Ensure `nut >= 1e-7` globally, replacing any `uniform 0` in `internalField` or fallback boundaries.
     - [x] Fix `fvSchemes`: Enforce `limited corrected 0.33` for `snGradSchemes` and `laplacianSchemes` on harsh meshes.
     - [x] Fix `fvSchemes`: Ensure bounded upwind schemes (`bounded Gauss upwind`) are used for all turbulence parameters (`k`, `epsilon`, `omega`).

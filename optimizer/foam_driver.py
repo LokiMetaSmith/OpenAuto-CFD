@@ -412,8 +412,8 @@ class FoamDriver(PhysicsDriver):
         if cfd_settings and 'turbulence_model' in cfd_settings:
             turbulence = cfd_settings['turbulence_model']
 
-        self._generate_turbulence_fields(zero, cfd_settings)
-        self._apply_boundary_conditions(zero)
+        self._generate_turbulence_fields(zero, cfd_settings, turbulence=turbulence)
+        self._apply_boundary_conditions(zero, turbulence=turbulence)
         self._sanitize_fields(zero)
         self._update_turbulence_properties(turbulence)
         self._update_fvSchemes(turbulence)
@@ -423,7 +423,7 @@ class FoamDriver(PhysicsDriver):
         self._inject_function_objects()
 
 
-    def _generate_turbulence_fields(self, zero_dir, cfd_settings):
+    def _generate_turbulence_fields(self, zero_dir, cfd_settings, turbulence="laminar"):
         """
         Dynamically generates initial fields based on cfd_settings.
         """
@@ -454,14 +454,19 @@ class FoamDriver(PhysicsDriver):
             internal_field = field_config.get('internalField', default_internal)
             wall_function = field_config.get('wallFunction', 'zeroGradient')
 
-            # Procedural override: Never use zeroGradient for k or epsilon to prevent stochasticDispersionRAS SIGFPE
-            if wall_function == "zeroGradient":
-                if field_name == "epsilon":
-                    wall_function = "epsilonWallFunction"
-                    print("Procedurally overriding epsilon initial wall function from zeroGradient to epsilonWallFunction to prevent SIGFPE.")
-                elif field_name == "k":
-                    wall_function = "kqRWallFunction"
-                    print("Procedurally overriding k initial wall function from zeroGradient to kqRWallFunction to prevent SIGFPE.")
+            if turbulence == "laminar":
+                if wall_function in ["epsilonWallFunction", "kqRWallFunction", "omegaWallFunction", "nutkWallFunction", "nutkRoughWallFunction"]:
+                    wall_function = "zeroGradient"
+                    print(f"Procedurally overriding {field_name} initial wall function to zeroGradient for laminar fallback.")
+            else:
+                # Procedural override: Never use zeroGradient for k or epsilon to prevent stochasticDispersionRAS SIGFPE
+                if wall_function == "zeroGradient":
+                    if field_name == "epsilon":
+                        wall_function = "epsilonWallFunction"
+                        print("Procedurally overriding epsilon initial wall function from zeroGradient to epsilonWallFunction to prevent SIGFPE.")
+                    elif field_name == "k":
+                        wall_function = "kqRWallFunction"
+                        print("Procedurally overriding k initial wall function from zeroGradient to kqRWallFunction to prevent SIGFPE.")
 
             dimensions = "[0 2 -2 0 0 0 0]"
             if field_name == "epsilon":
@@ -592,7 +597,7 @@ boundaryField
             with open(field_path, 'w') as f:
                 f.write(content)
 
-    def _apply_boundary_conditions(self, zero_dir):
+    def _apply_boundary_conditions(self, zero_dir, turbulence="laminar"):
         """
         Applies dynamic boundary conditions from the YAML config to fields in 0.
         """
@@ -695,16 +700,19 @@ boundaryField
                             new_block += "type            zeroGradient;\n"
                         elif field in ['k', 'epsilon', 'omega', 'nut']:
                             default_val = '1e-7' if field == 'nut' else '1e-6'
-                            if field == 'k':
-                                new_block += f"type            kqRWallFunction;\nvalue           uniform {default_val};\n"
-                            elif field == 'epsilon':
-                                new_block += f"type            epsilonWallFunction;\nvalue           uniform {default_val};\n"
-                            elif field == 'omega':
-                                new_block += f"type            omegaWallFunction;\nvalue           uniform {default_val};\n"
-                            elif field == 'nut':
-                                new_block += f"type            nutkWallFunction;\nvalue           uniform {default_val};\n"
-                            else:
+                            if turbulence == "laminar":
                                 new_block += f"type            zeroGradient;\nvalue           uniform {default_val};\n"
+                            else:
+                                if field == 'k':
+                                    new_block += f"type            kqRWallFunction;\nvalue           uniform {default_val};\n"
+                                elif field == 'epsilon':
+                                    new_block += f"type            epsilonWallFunction;\nvalue           uniform {default_val};\n"
+                                elif field == 'omega':
+                                    new_block += f"type            omegaWallFunction;\nvalue           uniform {default_val};\n"
+                                elif field == 'nut':
+                                    new_block += f"type            nutkWallFunction;\nvalue           uniform {default_val};\n"
+                                else:
+                                    new_block += f"type            zeroGradient;\nvalue           uniform {default_val};\n"
                         else:
                             new_block += "type            calculated;\nvalue           uniform 0;\n"
                     else:
@@ -724,16 +732,20 @@ boundaryField
                 # Procedural override: Never use zeroGradient for k or epsilon on walls to prevent stochasticDispersionRAS SIGFPE
                 patch_type = patch_config.get('type')
                 if patch_type == 'wall':
-                    if field == "epsilon" and "type            zeroGradient;" in new_block:
-                        pattern = re.compile(r'type\s+zeroGradient;\n?(?!.*value)', re.DOTALL)
-                        new_block = pattern.sub(lambda m: 'type            epsilonWallFunction;\n        value           $internalField;\n', new_block)
-                        new_block = re.sub(r'type\s+zeroGradient;', lambda m: 'type            epsilonWallFunction;', new_block)
-                        print(f"Procedurally overriding epsilon boundary wall function from zeroGradient to epsilonWallFunction on {patch_name} to prevent SIGFPE.")
-                    elif field == "k" and "type            zeroGradient;" in new_block:
-                        pattern = re.compile(r'type\s+zeroGradient;\n?(?!.*value)', re.DOTALL)
-                        new_block = pattern.sub(lambda m: 'type            kqRWallFunction;\n        value           $internalField;\n', new_block)
-                        new_block = re.sub(r'type\s+zeroGradient;', lambda m: 'type            kqRWallFunction;', new_block)
-                        print(f"Procedurally overriding k boundary wall function from zeroGradient to kqRWallFunction on {patch_name} to prevent SIGFPE.")
+                    if turbulence == "laminar":
+                        if field in ["k", "epsilon", "omega", "nut"]:
+                            new_block = re.sub(r'type\s+(epsilonWallFunction|kqRWallFunction|omegaWallFunction|nutkWallFunction|nutkRoughWallFunction);', 'type            zeroGradient;', new_block)
+                    else:
+                        if field == "epsilon" and "type            zeroGradient;" in new_block:
+                            pattern = re.compile(r'type\s+zeroGradient;\n?(?!.*value)', re.DOTALL)
+                            new_block = pattern.sub(lambda m: 'type            epsilonWallFunction;\n        value           $internalField;\n', new_block)
+                            new_block = re.sub(r'type\s+zeroGradient;', lambda m: 'type            epsilonWallFunction;', new_block)
+                            print(f"Procedurally overriding epsilon boundary wall function from zeroGradient to epsilonWallFunction on {patch_name} to prevent SIGFPE.")
+                        elif field == "k" and "type            zeroGradient;" in new_block:
+                            pattern = re.compile(r'type\s+zeroGradient;\n?(?!.*value)', re.DOTALL)
+                            new_block = pattern.sub(lambda m: 'type            kqRWallFunction;\n        value           $internalField;\n', new_block)
+                            new_block = re.sub(r'type\s+zeroGradient;', lambda m: 'type            kqRWallFunction;', new_block)
+                            print(f"Procedurally overriding k boundary wall function from zeroGradient to kqRWallFunction on {patch_name} to prevent SIGFPE.")
 
                 blocks[patch_name] = new_block.strip()
 
@@ -2467,7 +2479,7 @@ FoamFile
             import copy
             # We need a proxy config to generate fields for the strategy
             strategy_config = copy.deepcopy(cfd_settings)
-            strategy_config['turbulence_model'] = strategy["turbulence"]
+            strategy_config['turbulence_model'] = strategy.get("turbulence", cfd_settings.get("turbulence_model", "laminar"))
             # Add default omega initial field if missing
             if 'initial_fields' not in strategy_config:
                 strategy_config['initial_fields'] = {}
@@ -2477,21 +2489,22 @@ FoamFile
                  strategy_config['initial_fields']['nut'] = {'internalField': 'uniform 1e-7', 'wallFunction': 'nutkWallFunction'}
 
 
-            self._generate_turbulence_fields(zero_dir, strategy_config)
-            self._apply_boundary_conditions(zero_dir)
+            current_turbulence = strategy_config['turbulence_model']
+            self._generate_turbulence_fields(zero_dir, strategy_config, turbulence=current_turbulence)
+            self._apply_boundary_conditions(zero_dir, turbulence=current_turbulence)
             self._sanitize_fields(zero_dir)
 
             # 2. Configure turbulence model
-            self._update_turbulence_properties(strategy["turbulence"])
+            self._update_turbulence_properties(current_turbulence)
 
             # 3. Adaptive fvSchemes (mesh-aware)
-            self._update_fvSchemes(strategy["turbulence"], mesh_class)
+            self._update_fvSchemes(current_turbulence, mesh_class)
 
             # 4. fvSolution (relaxation tuning)
             self._update_fvSolution(
-                strategy["turbulence"],
+                current_turbulence,
                 cfd_settings,
-                relaxation_override=strategy["relaxation"]
+                relaxation_override=strategy.get("relaxation", {})
             )
 
             # 5. Ensure fields are sane
@@ -2508,7 +2521,7 @@ FoamFile
             metrics = self._parse_solver_metrics(output)
             score = self._score_run(metrics)
 
-            if strategy["turbulence"] == "laminar":
+            if current_turbulence == "laminar":
                 score *= 0.85 # Penalize laminar
 
             # Extract run time from log if possible for time-to-solution weighting
