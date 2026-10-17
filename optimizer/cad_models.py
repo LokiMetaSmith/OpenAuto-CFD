@@ -77,7 +77,7 @@ def build_helical_shape(h, twist_deg, path_r, profile_r, scale_ratio=1.0, hollow
             if hollow_inner_r is not None and hollow_inner_r < profile_r:
                 b3d.Ellipse(hollow_inner_r, hollow_inner_r * scale_ratio, mode=b3d.Mode.SUBTRACT)
 
-        b3d.sweep(sections=s.sketch, path=path.wire())
+        b3d.sweep(sections=s.sketch, path=path.wire(), is_frenet=True)
 
         if blade_chamfer > 0.0:
             try:
