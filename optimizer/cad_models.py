@@ -60,9 +60,12 @@ def build_helical_shape(h, twist_deg, path_r, profile_r, scale_ratio=1.0, hollow
     if twist_deg < 0:
         pitch = -pitch
 
-    helix = b3d.Helix(pitch=pitch, height=h, radius=path_r, center=(0, 0, -h / 2))
-    start_pos = helix.position_at(0)
-    tangent = helix.tangent_at(0)
+    # In build123d v0.13, Helix applies to BuildLine context
+    with b3d.BuildLine() as path:
+        b3d.Helix(pitch=pitch, height=h, radius=path_r, center=(0, 0, -h / 2))
+
+    start_pos = path.edges()[0].position_at(0)
+    tangent = path.edges()[0].tangent_at(0)
     radial_in = b3d.Vector(-start_pos.X, -start_pos.Y, 0).normalized()
     sketch_plane = b3d.Plane(origin=start_pos, x_dir=radial_in, z_dir=tangent)
 
@@ -74,7 +77,7 @@ def build_helical_shape(h, twist_deg, path_r, profile_r, scale_ratio=1.0, hollow
             if hollow_inner_r is not None and hollow_inner_r < profile_r:
                 b3d.Ellipse(hollow_inner_r, hollow_inner_r * scale_ratio, mode=b3d.Mode.SUBTRACT)
 
-        b3d.sweep(sections=s.sketch, path=helix)
+        b3d.sweep(sections=s.sketch, path=path.wire())
 
         if blade_chamfer > 0.0:
             try:
