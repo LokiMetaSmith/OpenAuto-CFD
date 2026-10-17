@@ -9,18 +9,18 @@ import subprocess
 # Ensure we can import from optimizer and its dependencies
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'optimizer')))
-from optimizer.scad_driver import ScadDriver
+from optimizer.build123d_driver import Build123dDriver
 
 class TestCFDGeneration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Ensure we are in the repo root for export.js to work
+        # Ensure we are in the repo root
         cls.original_cwd = os.getcwd()
         cls.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         os.chdir(cls.repo_root)
 
-        cls.corkscrew_driver = ScadDriver("corkscrew.scad")
-        cls.manifold_driver = ScadDriver("cyclone_filter_manifold.scad", fluid_volume_module="fluid_volume")
+        cls.corkscrew_driver = Build123dDriver("corkscrew.scad")
+        cls.manifold_driver = Build123dDriver("cyclone_filter_manifold.scad", fluid_volume_module="fluid_volume")
 
 
     @classmethod
@@ -130,7 +130,8 @@ class TestCFDGeneration(unittest.TestCase):
 
             print("Generating Fluid Volume with repro parameters...")
             success = self.corkscrew_driver.generate_stl(params, output_path)
-            self.assertTrue(success, "Fluid Volume generation failed")
+            # generate_stl returns an anchor coordinate list for CFD volumes, or True for normal parts
+            self.assertTrue(success if isinstance(success, bool) else (success is not None), "Fluid Volume generation failed")
             self.verify_stl(output_path)
 
 if __name__ == '__main__':

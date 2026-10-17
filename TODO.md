@@ -119,9 +119,9 @@ This section tracks necessary repository cleanup tasks to reorganize misplaced f
     - Review `.pip_install.log` and `test_meshing3.log`. If they are not needed for reference, delete them or add them to `.gitignore` and untrack them from the repository to clean up the root folder.
 
 ## Future Enhancements & Continuous Improvement
-- [ ] **Refactor `Build123dDriver` / `cad_models.py` for v0.13 API Changes:**
+- [x] **Refactor `Build123dDriver` / `cad_models.py` for v0.13 API Changes:**
     Recent updates to `build123d` (version 0.13.0) have modified how certain operations work (e.g., `Helix` isn't natively compatible inside `BuildPart` without conversion, causing `BuildPart doesn't have a Helix object or operation` errors). We need to refactor `cad_models.py` to ensure complete compatibility with the latest `build123d` API, such as sweeping a 2D sketch along a discrete `Curve` or `Edge` path.
-- [ ] **Migrate WASM OpenSCAD tests to Python / Native build123d:**
+- [x] **Migrate WASM OpenSCAD tests to Python / Native build123d:**
     The tests `test_inlet_cap_repro_failure` and `test_outlet_cap_repro_failure` currently rely on `node export.js` which breaks due to missing NPM dependencies (`@scalenc/stl-to-png`). Since the framework successfully migrated to native Python `build123d`, the test suite should be updated to use `Build123dDriver` as the default testing engine, eliminating brittle Node.js dependencies.
 - [ ] **Implement Full System Integration Tests (Dry-Mesh Validation):**
     Create an overarching integration test in the `test/` folder that specifically orchestrates the `DryMeshObjective` for a set of extreme geometries to guarantee the mesh classification (Good, Marginal, Bad) reliably prevents solver crashes in an automated CI environment without running expensive full physics solvers.
