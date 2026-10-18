@@ -64,8 +64,8 @@ class DryMeshObjective:
         )
 
         try:
-            driver.initialize_case()
-            driver._generate_mesh()
+            driver.prepare_case()
+            driver.run_meshing()
             driver.run_command(["checkMesh"], log_file=os.path.join(driver.case_dir, "log.checkMesh"), description="Checking Mesh Quality")
 
             non_ortho, skewness, failed, cells = self.parse_checkmesh_output(driver.case_dir)
