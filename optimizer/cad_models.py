@@ -239,7 +239,7 @@ def build_flat_end_screw(params):
     screw = build_helical_shape(h + 0.5, twist_deg, path_r, safe_profile_r)
     with b3d.BuildPart() as p:
         b3d.Cylinder(radius=outer_dia / 2.0, height=h)
-        p.part = p.part.intersect(screw)
+        p.part = p.part & screw
     return p.part
 
 def build_barb(hose_id=5.0, hose_od=6.5, barb_count=4, barb_length=2.0, swell=1.0, wall_thickness=1.0):
