@@ -9,9 +9,8 @@
     "test": "node test/regression.js"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.97"
-  },
-  "devDependencies": {
+    "@napi-rs/canvas": "^0.1.97",
     "@scalenc/stl-to-png": "^1.2.0"
-  }
+  },
+  "devDependencies": {}
 }

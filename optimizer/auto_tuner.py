@@ -24,8 +24,10 @@ class DryMeshObjective:
             output = f.read()
 
         for line in output.splitlines():
-            if "Failed 1 or more mesh checks" in line:
-                failed_checks += 1
+            if "Failed" in line and "mesh checks" in line:
+                match = re.search(r"Failed (\d+)", line)
+                if match:
+                    failed_checks += int(match.group(1))
             if "cells:" in line:
                 match = re.search(r"cells:\s+(\d+)", line)
                 if match:

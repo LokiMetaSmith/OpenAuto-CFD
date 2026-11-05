@@ -276,7 +276,7 @@ def main():
                 initial_params[param_name] = param_def['value']
 
     # Fallback to avoid empty initial parameters if no parameters are defined but the optimization loop expects them
-    if not initial_params and not args.params_file:
+    if not initial_params:
         initial_params = {"_dummy": True}
 
     # Extract constraints for the LLM
