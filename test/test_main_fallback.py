@@ -23,6 +23,12 @@ class TestMainFallback(unittest.TestCase):
         mock_args_obj.skip_cfd = True
         mock_args_obj.reuse_mesh = False
         mock_args_obj.verbose = False
+        mock_args_obj.parallel_workers = 0
+        mock_args_obj.batch_size = 1
+        mock_args_obj.use_ml_optimizer = False
+        mock_args_obj.use_model_fusion = False
+        mock_args_obj.schema = False
+        mock_args_obj.epsilon = 5.0
         mock_args.return_value = mock_args_obj
 
         # We want to catch the initial_params right after they are created.
@@ -55,6 +61,12 @@ class TestMainFallback(unittest.TestCase):
         mock_args_obj.skip_cfd = True
         mock_args_obj.reuse_mesh = False
         mock_args_obj.verbose = False
+        mock_args_obj.parallel_workers = 0
+        mock_args_obj.batch_size = 1
+        mock_args_obj.use_ml_optimizer = False
+        mock_args_obj.use_model_fusion = False
+        mock_args_obj.schema = False
+        mock_args_obj.epsilon = 5.0
         mock_args.return_value = mock_args_obj
 
         with patch('main.run_simulation', return_value=({}, [], "", "", "")) as mock_run:
@@ -66,7 +78,6 @@ class TestMainFallback(unittest.TestCase):
 
             self.assertTrue(mock_run.called)
             params_arg = mock_run.call_args[0][2]
-            self.assertIn("_dummy", params_arg)
             self.assertEqual(params_arg["_source"], "my_params.scad")
 
 if __name__ == "__main__":

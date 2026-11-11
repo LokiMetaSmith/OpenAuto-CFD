@@ -260,6 +260,15 @@ def main():
         print("\n[ModelFusion] Closed-loop multi-physics optimization finished successfully.")
         return
 
+    if getattr(args, "parallel_workers", 0) > 0 and getattr(args, "params_file", None):
+        print("Warning: --params-file provided along with --parallel-workers.")
+        print("Workers will only use these params as the single initial seed.")
+
+    max_iters = max_iterations if 'max_iterations' in locals() else 0
+    if getattr(args, "parallel_workers", 0) > 0 and getattr(args, "params_file", None) and max_iters > 1 and getattr(args, "no_llm", False):
+        print("Warning: Running multiple iterations with parallel workers, a static params file, and no LLM.")
+        print("This will just duplicate identical simulations unless external mutators are present.")
+
     # Initial parameters
     if args.params_file:
         print(f"Using parameters file: {args.params_file}. Clearing initial_params to allow file to take precedence.")
