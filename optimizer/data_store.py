@@ -3,6 +3,7 @@ import os
 import uuid
 import datetime
 from typing import Dict, List, Any
+import fcntl
 try:
     from scoring import calculate_score
 except ImportError:
@@ -40,7 +41,11 @@ class DataStore:
 
         # Write to file
         with open(self.log_file, "a") as f:
-            f.write(json.dumps(result) + "\n")
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(result) + "\n")
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def load_history(self) -> List[Dict[str, Any]]:
         """

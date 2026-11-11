@@ -358,6 +358,29 @@ class MultiPhysicsModelFusionOptimizer:
             metrics=actual_metrics,
             field_data=field_data
         )
+
+        # Drift check
+        if len(self.history) >= 5:
+            total_l2_error = 0.0
+            drift_count = 0
+            for r in self.history[-5:]:
+                dp_true = r["actual_metrics"].get("delta_p", 0)
+                dp_pred = r["pred_metrics"].get("delta_p", dp_true)
+                eff_true = r["actual_metrics"].get("separation_efficiency", 0)
+                eff_pred = r["pred_metrics"].get("separation_efficiency", eff_true)
+
+                err_dp = abs(dp_pred - dp_true) / dp_true if dp_true > 0 else 0.0
+                err_eff = abs(eff_pred - eff_true) / eff_true if eff_true > 0 else 0.0
+
+                total_l2_error += np.sqrt(err_dp**2 + err_eff**2)
+                drift_count += 1
+
+            if drift_count > 0:
+                avg_error = (total_l2_error / drift_count) * 100.0
+                if avg_error > 5.0 and self.verbose:
+                    print(f"  Warning: Surrogate drift ({avg_error:.2f}%) exceeds 5%. Forcing robust retrain.")
+                    self.surrogate.fit()
+
         self.surrogate.save(self.surrogate_db_path)
 
         # 7. Export Binary 3D Field for Real-time Visualization
