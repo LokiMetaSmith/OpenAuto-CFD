@@ -34,6 +34,9 @@ from cad_agent_tools import CADReasoningAgent, CADAgentToolRegistry
 from eda_agent_tools import EDAReasoningAgent, EDAAgentToolRegistry
 from eda_rf_driver import HighSpeedTransmissionLineEngine
 from container_detector import get_solver_status, attempt_start_podman
+from receipt_engine import ClaimReceiptGraph
+from guardian import PhyzConservationGuardian
+from compute_router import HardwareComputeRouter
 import time
 import math
 import cmath
@@ -281,6 +284,54 @@ class MultiPhysicsViewerHandler(SimpleHTTPRequestHandler):
                     self._send_json({"error": "No active project"}, 404)
             else:
                 self._send_json({"error": "Project manager uninitialized"}, 500)
+
+        elif path == "/api/receipts":
+            graph = ClaimReceiptGraph()
+            # If query params present, parse them
+            query = urllib.parse.parse_qs(parsed.query)
+            params = {}
+            for k, v in query.items():
+                try:
+                    params[k] = float(v[0])
+                except ValueError:
+                    params[k] = v[0]
+            if not params:
+                params = {
+                    "insert_length_mm": 50.0,
+                    "twist_deg": 720.0,
+                    "helix_path_radius_mm": 10.0,
+                    "helix_profile_radius_mm": 4.0,
+                    "helix_void_profile_radius_mm": 2.5,
+                    "tube_od_mm": 32.0,
+                    "tube_wall_mm": 1.5,
+                    "blade_chamfer_mm": 0.5,
+                    "barrel_length_mm": 60.0
+                }
+            graph.resolve(params)
+            self._send_json({
+                "is_valid": graph.is_valid(),
+                "receipts": graph.export_receipts()
+            })
+
+        elif path == "/api/guardian_telemetry":
+            guardian = PhyzConservationGuardian()
+            query = urllib.parse.parse_qs(parsed.query)
+            curr_e = float(query.get("current_energy", [1000.0])[0])
+            init_e = float(query.get("initial_energy", [1000.0])[0])
+            w_b = float(query.get("boundary_work", [0.0])[0])
+            report, _ = guardian.audit_rollout_step(curr_e, init_e, w_b)
+            self._send_json(report.to_dict())
+
+        elif path == "/api/compute_dispatch":
+            router = HardwareComputeRouter()
+            query = urllib.parse.parse_qs(parsed.query)
+            batch_size = int(query.get("batch_size", [1])[0])
+            device = router.select_device(batch_size)
+            self._send_json({
+                "batch_size": batch_size,
+                "selected_device": device,
+                "break_even_threshold": router.BATCH_BREAK_EVEN_THRESHOLD
+            })
 
         elif path == "/api/kicad_status":
             state = self.kicad_state or {

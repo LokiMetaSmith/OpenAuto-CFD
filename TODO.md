@@ -2,6 +2,13 @@
 
 This file tracks planned enhancements and future work for the OpenAuto-CFD framework and the Corkscrew Filter validation study.
 
+## vcad & phyz Paradigm Integration (Completed)
+- [x] **Phase 1: Baseline Mapping & Systems Audit:** Audited geometric constraints, standardized multi-rate flux protocols, established Claim/Receipt JSON schema, formulated SDF boundary velocity projection, designed upstream LM solver + IFT, and mapped `firmware_sil/` digital twin.
+- [x] **Phase 2: Differentiable BRep Sensitivity & Fail-Closed Receipt Engine:** Implemented `optimizer/receipt_engine.py` (resolving in $1.2\text{ ms}$ with atomic JSONL locks), `optimizer/assembly_solver.py` (IFT derivatives matching FD with $1.62 \times 10^{-9}$ error), and `optimizer/brep_sensitivity.py` (Hadamard shape derivative with $6.92 \times 10^{-14}$ error and OCCT topological invariance).
+- [x] **Phase 3: Multi-Physics Coupling, Subcycling & Guardian Governance:** Implemented `optimizer/coupling_bus.py` (multi-rate flux ledger with exact mass conservation), `optimizer/guardian.py` (continuous energy drift auditing and deterministic 3-tier fallback ladder), and `firmware_sil/` (deterministic virtual clock, Honeywell HSC-DIP-001PSI DP sensor, 20 kHz PWM actuator, and 200 Hz closed-loop PID control).
+- [x] **Phase 4: Learned Latent Dynamics, Trajectory Adjoints & Firmware Co-Design:** Implemented `optimizer/latent_dynamics.py` (RK4 time-stepping latent state rollout), `optimizer/trajectory_adjoint.py` (reverse-mode trajectory adjoints matching central FD with $4.38 \times 10^{-8}$ error and Lyapunov eddy discounting), and `optimizer/compute_router.py` ($N=128$ compute economics routing law).
+- [x] **Phase 5: Studio HUD Telemetry, MCP Agent Tooling & Fail-Closed Benchmark Suite:** Added `/api/receipts`, `/api/guardian_telemetry`, and `/api/compute_dispatch` endpoints to `viewer/server.py`; added 4 new MCP tools to `optimizer/mcp_server.py`; implemented 7-gate fail-closed benchmark suite `test/test_phyz_validate_gate.py` (41/41 passing).
+
 ## Real-Time Simulation, Model Fusion & Agentic CAD Roadmap (Completed)
 - [x] **Multi-Physics Surrogate & Model Fusion:** Universal RBF surrogate supporting coupled CFD (OpenFOAM), FEA structural stress (CalculiX), and EM (openEMS) metrics with 3D spatial vector fields (`surrogate_multiphysics.py`).
 - [x] **Exact Differentiable Gradients & Inverse Design:** Analytical exact RBF derivatives ($\approx 10^{-10}$ error vs finite differences) and multi-start L-BFGS-B inverse design optimizer converging in $<10\text{ ms}$ (`surrogate_gradients.py`).
